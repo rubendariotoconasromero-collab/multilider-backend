@@ -31,4 +31,14 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'propiedades' => [
+        'base_url' => env('PROPIEDADES_SERVICE_URL', 'http://localhost:5212'),
+    ],
+
+    'seguridad' => [
+        'base_url' => env('SEGURIDAD_SERVICE_URL', 'http://localhost:5211'),
+        'sync_email' => env('PROPIEDADES_SYNC_EMAIL'),
+        'sync_password' => env('PROPIEDADES_SYNC_PASSWORD'),
+    ],
+
 ];
