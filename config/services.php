@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'microservice_sync_enabled' => env('MICROSERVICE_SYNC_ENABLED', false),
 
     /*
     |--------------------------------------------------------------------------

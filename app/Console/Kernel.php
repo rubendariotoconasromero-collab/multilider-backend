@@ -12,6 +12,9 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
+        if (!config('services.microservice_sync_enabled')) {
+            return;
+        }
         // $schedule->command('inspire')->hourly();
 
         $schedule->command('propiedades:sync')

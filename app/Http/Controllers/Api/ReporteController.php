@@ -7,6 +7,7 @@ use App\Models\NotaVenta;
 use App\Models\Cuota;
 use App\Models\Pago;
 use App\Models\Asesor;
+use App\Models\User;
 use App\Models\MiEmpresa;
 use App\Exports\ReporteVentasCobrosExport;
 use App\Exports\ReporteCarteraMoraExport;
@@ -22,6 +23,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Maatwebsite\Excel\Facades\Excel;
 use Mpdf\Mpdf;
+use App\Services\PdfFactory;
 
 class ReporteController extends Controller
 {
@@ -29,11 +31,7 @@ class ReporteController extends Controller
 
     private function makeMpdf(array $config = []): Mpdf
     {
-        $tmpDir = storage_path('app/mpdf-tmp');
-        if (!is_dir($tmpDir)) {
-            mkdir($tmpDir, 0775, true);
-        }
-        return new Mpdf(array_merge(['tempDir' => $tmpDir], $config));
+        return PdfFactory::make($config);
     }
 
     private function rangoFechas(Request $request): array
@@ -1437,22 +1435,35 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     // ─── Envío de informe por correo ────────────────────────────────────────
 
+    public function destinatariosInforme()
+    {
+        $usuarios = User::where('estado', true)->select('id', 'nombre', 'correo')
+            ->orderBy('nombre')->get()
+            ->filter(fn($usuario) => filter_var($usuario->correo, FILTER_VALIDATE_EMAIL))
+            ->values();
+
+        return response()->json(['data' => $usuarios]);
+    }
+
     public function enviarInforme(Request $request)
     {
         $request->validate([
             'reporte'     => 'required|string|in:ventas-cobros,cartera-mora,comisiones,desempeno-asesores,inventario-propiedades',
-            'asesor_ids'  => 'required|array|min:1',
-            'asesor_ids.*'=> 'integer|exists:asesores,id',
+            'usuario_ids' => 'required_without:asesor_ids|prohibits:asesor_ids|array|min:1',
+            'usuario_ids.*' => 'integer|distinct|exists:users,id',
+            'asesor_ids' => 'required_without:usuario_ids|prohibits:usuario_ids|array|min:1',
+            'asesor_ids.*' => 'integer|distinct|exists:asesores,id',
         ]);
 
-        $asesores = Asesor::whereIn('id', $request->asesor_ids)
-            ->whereNotNull('correo')
-            ->where('correo', '!=', '')
-            ->get();
+        // Old open browser tabs can still submit advisor IDs; resolve their users.
+        $ids = $request->has('usuario_ids') ? $request->usuario_ids
+            : Asesor::whereIn('id', $request->asesor_ids)->pluck('user_id')->all();
+        $usuarios = User::whereIn('id', $ids)->where('estado', true)->get()
+            ->filter(fn($usuario) => filter_var($usuario->correo, FILTER_VALIDATE_EMAIL));
 
-        if ($asesores->isEmpty()) {
+        if ($usuarios->isEmpty() || $usuarios->count() !== count(array_unique($ids))) {
             return response()->json([
-                'message' => 'Ningún asesor seleccionado tiene correo registrado.',
+                'message' => 'Seleccione usuarios activos con un correo válido registrado.',
             ], 422);
         }
 
@@ -1464,14 +1475,10 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
             'inventario-propiedades' => 'Inventario de Propiedades',
         };
 
-        // Merge the nested 'params' object (sent by the frontend) into the request
-        // so that generarPdfBinario can read filters with $request->input('desde') etc.
-        if (is_array($request->input('params'))) {
-            $request->merge($request->input('params'));
-        }
+        $filtros = Request::create('/', 'GET', is_array($request->input('params')) ? $request->input('params') : []);
 
         try {
-            [$pdfBinario, $nombreArchivo] = $this->generarPdfBinario($request->reporte, $request);
+            [$pdfBinario, $nombreArchivo] = $this->generarPdfBinario($request->reporte, $filtros);
         } catch (\Throwable $e) {
             Log::error('Error generando PDF para informe: ' . $e->getMessage());
             return response()->json(['message' => 'No se pudo generar el PDF del informe.'], 500);
@@ -1480,11 +1487,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
         $enviados = 0;
         $fallidos = 0;
 
-        foreach ($asesores as $asesor) {
+        foreach ($usuarios->unique(fn($usuario) => strtolower($usuario->correo)) as $usuario) {
             try {
-                Mail::to($asesor->correo)
+                Mail::to($usuario->correo)
                     ->send(new InformeReporte(
-                        $asesor->nombre_completo,
+                        $usuario->nombre,
                         $nombreReporte,
                         $pdfBinario,
                         $nombreArchivo,
@@ -1492,7 +1499,7 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
                 $enviados++;
             } catch (\Throwable $e) {
                 $fallidos++;
-                Log::error("Error enviando informe a {$asesor->correo}: " . $e->getMessage());
+                Log::error("Error enviando informe a {$usuario->correo}: " . $e->getMessage());
             }
         }
 

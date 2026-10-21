@@ -7,7 +7,7 @@ use App\Models\Asesor;
 use App\Models\Egreso;
 use App\Models\MiEmpresa;
 use Illuminate\Http\Request;
-use Mpdf\Mpdf;
+use App\Services\PdfFactory;
 
 class ComisionAsesorController extends Controller
 {
@@ -162,7 +162,7 @@ class ComisionAsesorController extends Controller
         $empresa  = MiEmpresa::first();
         $html     = $this->buildComprobanteHtml($egreso, $empresa);
 
-        $mpdf = new Mpdf([
+        $mpdf = PdfFactory::make([
             'margin_top'    => 15,
             'margin_bottom' => 15,
             'margin_left'   => 15,

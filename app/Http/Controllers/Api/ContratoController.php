@@ -7,7 +7,7 @@ use App\Models\Contrato;
 use App\Models\Entrega;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
-use Mpdf\Mpdf;
+use App\Services\PdfFactory;
 
 class ContratoController extends Controller
 {
@@ -184,11 +184,7 @@ class ContratoController extends Controller
     // ---------------------------------------------------------------
     private function makeMpdf(array $config = []): \Mpdf\Mpdf
     {
-        $tmpDir = storage_path('app/mpdf-tmp');
-        if (!is_dir($tmpDir)) {
-            mkdir($tmpDir, 0775, true);
-        }
-        return new \Mpdf\Mpdf(array_merge(['tempDir' => $tmpDir], $config));
+        return PdfFactory::make($config);
     }
 
     // Helpers de conversión numérica a letras (español)

@@ -12,7 +12,7 @@ use App\Services\MoraService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Mpdf\Mpdf;
+use App\Services\PdfFactory;
 
 class PagoController extends Controller
 {
@@ -550,7 +550,7 @@ class PagoController extends Controller
         $empresa  = MiEmpresa::first();
         $html     = $this->buildComprobanteHtml($pago, $empresa);
 
-        $mpdf = new Mpdf([
+        $mpdf = PdfFactory::make([
             'margin_top'    => 12,
             'margin_bottom' => 12,
             'margin_left'   => 15,

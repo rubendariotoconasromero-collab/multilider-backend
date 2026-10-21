@@ -27,6 +27,7 @@ use App\Http\Controllers\Api\CuentaBancariaController;
 use App\Http\Controllers\Api\MetodoPagoCuentaDefaultController;
 use App\Http\Controllers\Api\PagoPublicoController;
 use App\Http\Controllers\Api\ProfileController;
+use App\Http\Controllers\Api\ProfileMailController;
 use App\Http\Controllers\Api\IngresoController;
 use App\Http\Controllers\Api\EgresoController;
 use App\Http\Controllers\Api\ComisionAsesorController;
@@ -117,6 +118,7 @@ Route::middleware('auth:sanctum,jwt')->group(function () {
 
     // Reportes
     Route::prefix('reportes')->group(function () {
+        Route::get('destinatarios', [ReporteController::class, 'destinatariosInforme']);
         Route::get('ventas-cobros',       [ReporteController::class, 'ventasCobros']);
         Route::get('ventas-cobros/excel', [ReporteController::class, 'ventasCobrosExcel']);
         Route::get('ventas-cobros/pdf',   [ReporteController::class, 'ventasCobrosPdf']);
@@ -144,6 +146,15 @@ Route::middleware('auth:sanctum,jwt')->group(function () {
     Route::get('/perfil', [ProfileController::class, 'show']);
     Route::put('/perfil', [ProfileController::class, 'update']);
     Route::put('/perfil/cambiar-password', [ProfileController::class, 'changePassword']);
+    Route::prefix('perfil/correo')->middleware('throttle:60,1,profile-mail:')->group(function () {
+        Route::get('estado', [ProfileMailController::class, 'status']);
+        Route::post('conectar', [ProfileMailController::class, 'connect'])->middleware('throttle:5,1,profile-mail-connect:');
+        Route::post('desconectar', [ProfileMailController::class, 'disconnect']);
+        Route::get('mensajes', [ProfileMailController::class, 'messages']);
+        Route::get('mensajes/{uid}', [ProfileMailController::class, 'read'])->whereNumber('uid');
+        Route::post('mensajes/{uid}/mover', [ProfileMailController::class, 'move'])->whereNumber('uid');
+        Route::post('enviar', [ProfileMailController::class, 'send'])->middleware('throttle:10,1,profile-mail-send:');
+    });
 
     Route::apiResource('usuarios', UserController::class);
     Route::get('usuarios/{id}/asignaciones', [UserController::class, 'getAsignaciones']);
