@@ -26,7 +26,14 @@ class RemoteCatalogContractTest extends TestCase
         Sanctum::actingAs($this->user()); // Only a controlled test identity; actual remote login is F3.
         $fake = new FakeMicroserviceClients($responses);
         $this->app->instance(HttpClientFactory::class, $fake);
+        config(['identity.key'=>'fixture-signing-key-only-for-tests-0123456789']);
         if ($credential) {
+            $this->app->instance(\App\Services\Remote\RemoteAuthenticator::class, new class extends \App\Services\Remote\RemoteAuthenticator {
+                public function __construct() {}
+                public function authenticate(Request $request): ?\App\Auth\RemotePrincipal {
+                    return new \App\Auth\RemotePrincipal(['id'=>1,'correo'=>'fixture@example.test','roles_permisos'=>[]], [], 'fixture.user.signature');
+                }
+            });
             $this->app->instance(DelegatedTokenProvider::class, new class implements DelegatedTokenProvider
             {
                 public function forRequest(Request $request, string $service): string
@@ -127,8 +134,7 @@ class RemoteCatalogContractTest extends TestCase
     public function test_sanctum_token_is_never_forwarded_as_dotnet_credential(): void
     {
         $fake = $this->remote([], false);
-        $this->withToken('123|not-a-dotnet-token')->getJson('/api/propiedades')->assertStatus(503)
-            ->assertJsonPath('code', 'INTEGRATION_NOT_READY');
+        $this->withToken('123|not-a-dotnet-token')->getJson('/api/propiedades')->assertUnauthorized();
         $this->assertSame([], $fake->services);
     }
 

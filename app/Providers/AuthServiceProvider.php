@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Auth\ArchitectureGuard;
 use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider;
 use Illuminate\Support\Facades\Auth;
 
@@ -23,11 +24,11 @@ class AuthServiceProvider extends ServiceProvider
     {
         $this->registerPolicies();
 
-        Auth::extend('jwt', function ($app, $name, array $config) {
-            return new \App\Auth\JwtGuard(
-                $app['request'],
-                config('services.jwt_secret', '')
-            );
+        Auth::extend('architecture', function ($app) {
+            $guard = new ArchitectureGuard($app['request']);
+            $app->refresh('request', $guard, 'setRequest');
+
+            return $guard;
         });
     }
 }

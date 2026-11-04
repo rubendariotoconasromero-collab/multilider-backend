@@ -25,6 +25,12 @@ class RouteServiceProvider extends ServiceProvider
     public function boot(): void
     {
         RateLimiter::for('api', function (Request $request) {
+            // Login/logout must work before authentication, including expired or revoked
+            // credentials and an unavailable authority. Never resolve the guard here.
+            if (in_array($request->path(), ['api/login', 'api/logout'], true)) {
+                return Limit::perMinute(60)->by($request->ip());
+            }
+
             return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
         });
 

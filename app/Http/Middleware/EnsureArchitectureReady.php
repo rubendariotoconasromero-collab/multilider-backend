@@ -14,9 +14,15 @@ final class EnsureArchitectureReady
     public function handle(Request $request, Closure $next)
     {
         if (! $this->mode->isLocal()
-            && ! ($request->isMethod('GET') && $request->path() === 'api/propiedades')) {
-            // Fail closed for ALL other API routes, including login, landing, public callbacks,
-            // mail and reports: their ownership/authentication is completed in later phases.
+            && ! ($request->isMethod('GET') && $request->path() === 'api/propiedades')
+            && ! in_array($request->method().' '.$request->path(), [
+                'POST api/login', 'POST api/logout', 'GET api/me', 'GET api/perfil',
+                'PUT api/perfil', 'PUT api/perfil/cambiar-password',
+            ], true)
+            && ! $request->is('api/perfil/correo/*')
+            && ! preg_match('~^api/(usuarios|roles|permisos|asignar-permisos)(/|$)~', $request->path())) {
+            // Laravel continues to own dashboard/reports/company/mail/portal.
+            // Business adapters still pending in F4-F8 must not silently read local data.
             throw new IntegrationException('Esta operación todavía no está disponible en modo microservicios.');
         }
 

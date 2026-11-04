@@ -12,7 +12,7 @@ class ConfigurationCacheTest extends TestCase
     {
         $cache = 'storage/framework/testing/config-probe.php';
         $env = ['APP_CONFIG_CACHE' => $cache, 'APP_ARCHITECTURE' => $mode,
-            'JWT_SECRET' => 'fixture-signing-key', 'LIBELULA_ENABLED' => '0',
+            'JWT_SECRET' => 'fixture-signing-key', 'IDENTITY_SIGNING_KEY' => 'fixture-identity-signing-key-only-for-tests-0123456789', 'LIBELULA_ENABLED' => '0',
             'LIBELULA_API_URL' => 'https://payments.example.test', 'LIBELULA_API_KEY' => 'fixture-payment-key',
             'FRONTEND_URL' => 'https://front.example.test', 'APP_URL' => 'https://api.example.test'];
         $probe = <<<'PHP'
@@ -35,7 +35,7 @@ PHP;
             $cached = $this->runPhp(['-r', $probe], $env + []);
             $this->assertSame($plain, $cached);
             $this->assertSame($mode, json_decode($cached, true)['mode']);
-            $this->assertSame($mode === 'local' ? 422 : 503, json_decode($cached, true)['http_status']);
+            $this->assertSame(422, json_decode($cached, true)['http_status']);
             $changed = $env;
             $changed['APP_ARCHITECTURE'] = $mode === 'local' ? 'microservices' : 'local';
             $this->assertSame($cached, $this->runPhp(['-r', $probe], $changed), 'Cached mode must not change until cache is regenerated.');

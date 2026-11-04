@@ -12,6 +12,9 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
+        if (!app(\App\Architecture\ArchitectureMode::class)->isLocal()) {
+            $schedule->command('identity:retry-revocations')->everyMinute()->withoutOverlapping();
+        }
         // F2: legacy upserts must not overwrite business tables in either mode.
         // Register new projection jobs only after their identity/ownership is defined.
     }

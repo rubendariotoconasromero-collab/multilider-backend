@@ -3,22 +3,26 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
 use App\Models\RolPermisoUsuario;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules\Password;
 
 class UserController extends Controller
 {
     // Obtener todos los usuarios
-    public function index() {
+    public function index()
+    {
         $usuarios = User::all();
+
         return response()->json($usuarios, 200);
     }
 
     // Crear un nuevo usuario
-    public function store(Request $request) {
+    public function store(Request $request)
+    {
         $request->validate([
             'nombre' => 'required|string|max:255',
             'correo' => 'required|email|unique:users',
@@ -28,41 +32,44 @@ class UserController extends Controller
                     ->mixedCase() // Al menos una mayúscula y una minúscula
                     ->letters()   // Al menos una letra
                     ->numbers()   // Al menos un número
-                    ->symbols()   // Al menos un símbolo (ej: !@#$%)
-            ]
+                    ->symbols(),   // Al menos un símbolo (ej: !@#$%)
+            ],
         ]);
 
         $usuario = User::create([
             'nombre' => $request->nombre,
             'correo' => $request->correo,
             'password' => Hash::make($request->password),
-            'estado' => $request->estado ?? true
+            'estado' => $request->estado ?? true,
         ]);
 
         return response()->json(['message' => 'Usuario creado con éxito', 'data' => $usuario], 201);
     }
 
     // Obtener un usuario específico
-    public function show($id) {
+    public function show($id)
+    {
         $usuario = User::findOrFail($id);
+
         return response()->json($usuario, 200);
     }
 
     // Actualizar un usuario
-    public function update(Request $request, $id) {
+    public function update(Request $request, $id)
+    {
         $usuario = User::findOrFail($id);
 
         // 1. Aplicamos la validación
         $request->validate([
             'nombre' => 'string|max:255',
-            'correo' => 'email|unique:users,correo,' . $usuario->id,
+            'correo' => 'email|unique:users,correo,'.$usuario->id,
             'password' => [
                 'nullable', // <-- CLAVE: Permite que el campo venga vacío si no quieren cambiar la clave
                 Password::min(8) // Longitud mínima de 8
                     ->mixedCase() // Al menos una mayúscula y una minúscula
                     ->letters()   // Al menos una letra
                     ->numbers()   // Al menos un número
-                    ->symbols()   // Al menos un símbolo (ej: !@#$%)
+                    ->symbols(),   // Al menos un símbolo (ej: !@#$%)
             ],
         ]);
 
@@ -70,7 +77,7 @@ class UserController extends Controller
         $data = $request->except('password');
 
         // 3. Verificamos si realmente enviaron una contraseña (filled asegura que no esté vacía ni nula)
-        if($request->filled('password')) {
+        if ($request->filled('password')) {
             $data['password'] = Hash::make($request->password);
         }
 
@@ -81,11 +88,12 @@ class UserController extends Controller
     }
 
     // Eliminar o desactivar un usuario
-    public function destroy($id) {
+    public function destroy($id)
+    {
         $usuario = User::findOrFail($id);
-        
+
         // Invertimos el estado lógico (toggle)
-        $usuario->estado = !$usuario->estado; 
+        $usuario->estado = ! $usuario->estado;
         $usuario->save();
 
         // Generamos el mensaje dinámico
@@ -94,35 +102,41 @@ class UserController extends Controller
         return response()->json(['message' => $mensaje, 'estado' => $usuario->estado], 200);
     }
 
-    public function getAsignaciones($id) {
-        $usuario = \App\Models\User::with('rolesPermisos')->findOrFail($id);
+    public function getAsignaciones($id)
+    {
+        $usuario = User::with('rolesPermisos')->findOrFail($id);
+
         // Devolvemos solo el array de IDs de la tabla intermedia rol_permiso
         return response()->json($usuario->rolesPermisos->pluck('rol_permiso_id'));
     }
 
     // Sincronizar las combinaciones Rol-Permiso para el usuario
-    public function syncAsignaciones(Request $request, $id) {
+    public function syncAsignaciones(Request $request, $id)
+    {
         $request->validate([
-            'rol_permiso_ids' => 'array'
+            'rol_permiso_ids' => 'present|array',
+            'rol_permiso_ids.*' => 'integer|distinct|exists:rol_permiso,id',
         ]);
 
-        $usuario = \App\Models\User::findOrFail($id);
+        $usuario = User::findOrFail($id);
 
-        // Borramos las asignaciones anteriores
-        \App\Models\RolPermisoUsuario::where('user_id', $id)->delete();
+        DB::transaction(function () use ($request, $id) {
+            // Borramos las asignaciones anteriores
+            RolPermisoUsuario::where('user_id', $id)->delete();
 
-        // Creamos las nuevas
-        $nuevasAsignaciones = [];
-        foreach ($request->rol_permiso_ids as $rp_id) {
-            $nuevasAsignaciones[] = [
-                'user_id' => $id,
-                'rol_permiso_id' => $rp_id,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ];
-        }
+            // Creamos las nuevas
+            $nuevasAsignaciones = [];
+            foreach ($request->rol_permiso_ids as $rp_id) {
+                $nuevasAsignaciones[] = [
+                    'user_id' => $id,
+                    'rol_permiso_id' => $rp_id,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
+            }
 
-        \App\Models\RolPermisoUsuario::insert($nuevasAsignaciones);
+            RolPermisoUsuario::insert($nuevasAsignaciones);
+        });
 
         return response()->json(['message' => 'Accesos sincronizados correctamente']);
     }

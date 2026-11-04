@@ -39,12 +39,12 @@ class ArchitectureModeTest extends TestCase
     {
         $this->assertSame('local', (require config_path('architecture.php'))['mode']);
         $this->assertInstanceOf(LocalCatalogGateway::class, app(CatalogGateway::class));
-        foreach ([IdentityGateway::class, CommercialGateway::class, FinanceGateway::class] as $contract) {
+        foreach ([CommercialGateway::class, FinanceGateway::class] as $contract) {
             $this->assertInstanceOf(LocalDomainGateway::class, app($contract));
         }
         $this->mode('microservices');
         $this->assertInstanceOf(RemoteCatalogGateway::class, app(CatalogGateway::class));
-        foreach ([IdentityGateway::class, CommercialGateway::class, FinanceGateway::class] as $contract) {
+        foreach ([CommercialGateway::class, FinanceGateway::class] as $contract) {
             $this->assertInstanceOf(PendingDomainGateway::class, app($contract));
         }
     }
@@ -114,7 +114,7 @@ class ArchitectureModeTest extends TestCase
 
     public static function incompleteRoutes(): array
     {
-        return [['POST', '/api/login'], ['POST', '/api/ventas'], ['PUT', '/api/ventas/1/anular'],
+        return [['POST', '/api/ventas'], ['PUT', '/api/ventas/1/anular'],
             ['POST', '/api/propiedades'], ['POST', '/api/pagos/1/procesar'], ['POST', '/api/public/pagos/callback'],
             ['GET', '/api/propiedades/1'], ['GET', '/api/landing'], ['POST', '/api/reportes/enviar-informe']];
     }

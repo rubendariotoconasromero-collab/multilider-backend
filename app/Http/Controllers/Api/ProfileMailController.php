@@ -21,7 +21,7 @@ class ProfileMailController extends Controller
 
     private function key(Request $request): string
     {
-        return 'profile-mail:'.$request->user()->id.':'.hash('sha256', $request->bearerToken().'|'.$request->user()->correo);
+        return \App\Services\ProfileMailSession::key($request);
     }
 
     public function status(Request $request)
@@ -38,6 +38,7 @@ class ProfileMailController extends Controller
             $connection = $mail->open($email, $data['password']);
             $mail->close($connection);
             Cache::put($this->key($request), Crypt::encryptString($data['password']), now()->addMinutes(20));
+            \App\Services\ProfileMailSession::remember($request);
             return response()->json(['email' => $email, 'connected' => true]);
         } catch (\Throwable $e) {
             Cache::forget($this->key($request));
@@ -47,7 +48,7 @@ class ProfileMailController extends Controller
 
     public function disconnect(Request $request)
     {
-        Cache::forget($this->key($request));
+        \App\Services\ProfileMailSession::forget($request);
         return response()->json(['connected' => false]);
     }
 

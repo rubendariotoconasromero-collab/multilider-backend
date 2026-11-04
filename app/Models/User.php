@@ -13,13 +13,6 @@ class User extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable;
 
     /**
-     * Cuando el usuario se autentica vía JwtGuard, aquí llegan los permisos
-     * tal cual los emitió MSMultilider.Seguridad en el JWT (siempre frescos,
-     * sin depender de las tablas locales de roles/permisos).
-     */
-    public ?array $jwtPermissions = null;
-
-    /**
      * The attributes that are mass assignable.
      *
      * @var array<int, string>
@@ -52,6 +45,15 @@ class User extends Authenticatable
         'password' => 'hashed',
     ];
 
+    protected static function booted(): void
+    {
+        static::updated(function (self $user) {
+            if ($user->wasChanged('password') || $user->wasChanged('estado')) {
+                $user->tokens()->delete();
+            }
+        });
+    }
+
     public function rolesPermisos() {
         return $this->hasMany(RolPermisoUsuario::class, 'user_id');
     }
@@ -72,12 +74,10 @@ class User extends Authenticatable
      */
     public function hasPermission($permissionName)
     {
-        if ($this->jwtPermissions !== null) {
-            return in_array($permissionName, $this->jwtPermissions, true);
-        }
+        if (!$this->estado) { return false; }
 
-        return $this->asignaciones()->whereHas('permiso', function ($query) use ($permissionName) {
-            $query->where('nombre', $permissionName);
+        return $this->asignaciones()->whereHas('rol', fn($q) => $q->where('estado', true))->whereHas('permiso', function ($query) use ($permissionName) {
+            $query->where('nombre', $permissionName)->where('estado', true);
         })->exists();
     }
 }

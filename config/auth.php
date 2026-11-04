@@ -41,8 +41,8 @@ return [
             'provider' => 'users',
         ],
 
-        'jwt' => [
-            'driver' => 'jwt',
+        'architecture' => [
+            'driver' => 'architecture',
             'provider' => 'users',
         ],
     ],

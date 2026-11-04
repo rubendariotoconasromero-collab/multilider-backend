@@ -67,7 +67,9 @@ Route::get('/landing/sectores-urbanos/{distritoId}', [LandingController::class, 
 
 Route::post('/login', [AuthController::class, 'login']);
 
-Route::middleware('auth:sanctum,jwt')->group(function () {
+Route::post('/logout', [AuthController::class, 'logout']);
+
+Route::middleware('auth:architecture')->group(function () {
 
     // Utilidad: resolver URL acortada de Google Maps
     Route::get('/resolver-url-mapa', function (Illuminate\Http\Request $request) {
@@ -108,7 +110,6 @@ Route::middleware('auth:sanctum,jwt')->group(function () {
     });
 
     // Rutas de Autenticación
-    Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::get('/mi-cartera', [ClienteController::class, 'miCartera']);
 
@@ -156,6 +157,7 @@ Route::middleware('auth:sanctum,jwt')->group(function () {
         Route::post('enviar', [ProfileMailController::class, 'send'])->middleware('throttle:10,1,profile-mail-send:');
     });
 
+    Route::middleware(\App\Http\Middleware\IdentityAdministration::class)->group(function () {
     Route::apiResource('usuarios', UserController::class);
     Route::get('usuarios/{id}/asignaciones', [UserController::class, 'getAsignaciones']);
     Route::post('usuarios/{id}/asignaciones/sync', [UserController::class, 'syncAsignaciones']);
@@ -167,6 +169,8 @@ Route::middleware('auth:sanctum,jwt')->group(function () {
     Route::apiResource('permisos', PermisoController::class);
     
     Route::apiResource('asignar-permisos', RolPermisoController::class);
+
+    });
 
     Route::apiResource('propietarios', PropietarioController::class);
     Route::apiResource('ubicaciones', UbicacionController::class);
