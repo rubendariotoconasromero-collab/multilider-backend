@@ -26,7 +26,7 @@ class AuthServiceProvider extends ServiceProvider
         Auth::extend('jwt', function ($app, $name, array $config) {
             return new \App\Auth\JwtGuard(
                 $app['request'],
-                env('JWT_SECRET', '')
+                config('services.jwt_secret', '')
             );
         });
     }

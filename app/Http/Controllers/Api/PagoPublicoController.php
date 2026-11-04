@@ -183,18 +183,18 @@ class PagoPublicoController extends Controller
             }
 
             // ── 3. Llamar a Libélula ──────────────────────────────────────────
-            $libelulaUrl = rtrim(env('LIBELULA_API_URL', 'https://api.libelula.bo'), '/');
+            $libelulaUrl = rtrim(config('services.libelula.base_url'), '/');
             // Incluimos nuestro identificador en el callback_url (igual que el plugin de WooCommerce
             // incluye todotix_order_id), para poder asociar el callback con nuestra transacción
             // sin depender únicamente del libelula_uuid.
-            $callbackUrl = env('APP_URL', 'http://localhost:8000')
+            $callbackUrl = config('services.libelula.callback_base_url')
                 . '/api/public/pagos/callback'
                 . '?identificador=' . urlencode($idTemp);
             // url_retorno hace que Libélula redirija el navegador del usuario al frontend tras el pago
-            $urlRetorno  = env('FRONTEND_URL', 'http://localhost:5173') . '/pagar?txn=' . urlencode($idTemp);
+            $urlRetorno  = config('services.libelula.frontend_url') . '/pagar?txn=' . urlencode($idTemp);
 
             $libelulaResp = Http::timeout(15)->post($libelulaUrl . '/rest/deuda/registrar', [
-                'appkey'               => env('LIBELULA_API_KEY'),
+                'appkey'               => config('services.libelula.api_key'),
                 'email_cliente'        => $cliente->correo ?? $request->correo_pagador,
                 'identificador'        => $idTemp,
                 'callback_url'         => $callbackUrl,

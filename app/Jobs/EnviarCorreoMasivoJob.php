@@ -18,14 +18,21 @@ class EnviarCorreoMasivoJob implements ShouldQueue
 
     public int $tries = 3;
     public int $timeout = 120;
+    // Default also protects jobs serialized before architecture selection existed.
+    public string $architectureMode = 'local';
 
     public function __construct(
         public int $campanaId,
         public array $destinatarios  // [['nombre' => '...', 'correo' => '...']]
-    ) {}
+    ) {
+        $this->architectureMode = app(\App\Architecture\ArchitectureMode::class)->value;
+    }
 
     public function handle(): void
     {
+        if (!$this->canRunInCurrentMode()) {
+            throw new \App\Services\Remote\IntegrationException('Trabajo de correo incompatible con el modo actual; revisar antes de reintentar.');
+        }
         $campana = CampanaCorreo::find($this->campanaId);
         if (!$campana) {
             return;
@@ -75,10 +82,17 @@ class EnviarCorreoMasivoJob implements ShouldQueue
 
     public function failed(\Throwable $exception): void
     {
+        if (!$this->canRunInCurrentMode()) { return; }
         $campana = CampanaCorreo::find($this->campanaId);
         if ($campana) {
             $campana->update(['estado' => 'fallido']);
         }
         Log::error("Job EnviarCorreoMasivo falló para campaña {$this->campanaId}: " . $exception->getMessage());
+    }
+
+    private function canRunInCurrentMode(): bool
+    {
+        $mode = app(\App\Architecture\ArchitectureMode::class);
+        return $mode->isLocal() && $this->architectureMode === $mode->value;
     }
 }

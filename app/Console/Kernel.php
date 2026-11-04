@@ -12,18 +12,8 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        if (!config('services.microservice_sync_enabled')) {
-            return;
-        }
-        // $schedule->command('inspire')->hourly();
-
-        $schedule->command('propiedades:sync')
-            ->everyTwoMinutes()
-            ->withoutOverlapping();
-
-        $schedule->command('usuarios:sync')
-            ->everyTwoMinutes()
-            ->withoutOverlapping();
+        // F2: legacy upserts must not overwrite business tables in either mode.
+        // Register new projection jobs only after their identity/ownership is defined.
     }
 
     /**

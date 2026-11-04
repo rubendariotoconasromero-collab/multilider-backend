@@ -9,37 +9,9 @@ use Illuminate\Support\Facades\DB;
 
 class PropiedadController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request, \App\Contracts\Architecture\CatalogGateway $catalog)
     {
-        $query = Propiedad::with([
-            'propietarios',
-            'sectorUrbano.distrito.ciudad',
-            'ubicacion',
-            'caracteristicas',
-            'imagenes',
-        ]);
-
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('codigo', 'LIKE', "%{$search}%")
-                  ->orWhereHas('propietarios', fn($s) =>
-                      $s->where('nombre_completo', 'LIKE', "%{$search}%")
-                        ->orWhere('nombre_empresa', 'LIKE', "%{$search}%")
-                  );
-            });
-        }
-
-        if ($request->filled('ciudad_id')) {
-            $query->whereHas('sectorUrbano.distrito', fn($q) => $q->where('ciudad_id', $request->ciudad_id));
-        }
-
-        if ($request->filled('distrito_id')) {
-            $query->whereHas('sectorUrbano', fn($q) => $q->where('distrito_id', $request->distrito_id));
-        }
-
-        $perPage = $request->input('per_page', 10);
-        return response()->json($query->orderBy('id', 'desc')->paginate($perPage), 200);
+        return response()->json($catalog->properties($request), 200);
     }
 
     public function store(Request $request)

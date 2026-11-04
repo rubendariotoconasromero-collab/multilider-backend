@@ -11,11 +11,8 @@ use App\Models\Cuota;
 use App\Models\Pago;
 use App\Models\Contrato;
 use App\Models\Egreso;
-use GuzzleHttp\Client;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class NotaVentaController extends Controller
@@ -80,6 +77,7 @@ class NotaVentaController extends Controller
 
             $propiedad = Propiedad::findOrFail($validatedData['propiedad_id']);
             if ($propiedad->estado === 'Vendido') {
+                DB::rollBack();
                 return response()->json(['message' => 'Esta propiedad ya fue vendida.'], 400);
             }
 
@@ -193,6 +191,7 @@ class NotaVentaController extends Controller
             $venta = NotaVenta::findOrFail($id);
             
             if ($venta->estado === 'Anulada') {
+                DB::rollBack();
                 return response()->json(['message' => 'La venta ya se encuentra anulada'], 400);
             }
 
@@ -283,67 +282,9 @@ class NotaVentaController extends Controller
         Cuota::insert($cuotasInsert);
     }
 
-    /**
-     * Refleja el nuevo estado de la propiedad en MSMultilider.Propiedades (best-effort).
-     * Si el microservicio no responde, no debe interrumpir el flujo de venta/anulación:
-     * el schedule de `propiedades:sync` corrige la copia local en el siguiente ciclo,
-     * pero el catálogo del microservicio quedaría desactualizado hasta reintentar.
-     */
+    /** Transitional compatibility bridge; route readiness prevents remote sales in F2. */
     private function pushEstadoAMicroservicio(Propiedad $propiedad, string $estado): void
     {
-        try {
-            $token = Cache::remember('propiedades_sync_jwt', now()->addHours(7), function () {
-                $authClient = new Client(['base_uri' => rtrim(config('services.seguridad.base_url'), '/') . '/']);
-                $res = $authClient->post('api/auth/login', [
-                    'json' => [
-                        'correo' => config('services.seguridad.sync_email'),
-                        'password' => config('services.seguridad.sync_password'),
-                    ],
-                ]);
-                $body = json_decode($res->getBody()->getContents(), true);
-                return $body['access_token'] ?? $body['accessToken'];
-            });
-
-            $client = new Client([
-                'base_uri' => rtrim(config('services.propiedades.base_url'), '/') . '/',
-                'timeout' => 5,
-            ]);
-
-            $res = $client->get("api/propiedades/{$propiedad->id}", [
-                'headers' => ['Authorization' => "Bearer {$token}"],
-            ]);
-            $dto = json_decode($res->getBody()->getContents(), true);
-
-            $client->put("api/propiedades/{$propiedad->id}", [
-                'headers' => ['Authorization' => "Bearer {$token}"],
-                'json' => [
-                    'propietario_ids' => array_column($dto['propietarios'] ?? [], 'id'),
-                    'sector_urbano_id' => $dto['sector_urbano_id'],
-                    'ubicacion_id' => $dto['ubicacion_id'],
-                    'tipo' => $dto['tipo'],
-                    'codigo' => $dto['codigo'],
-                    'precio_venta' => $dto['precio_venta'],
-                    'moneda' => $dto['moneda'],
-                    'superficie_m2' => $dto['superficie_m2'],
-                    'superficie_construida_m2' => $dto['superficie_construida_m2'],
-                    'frente_mts' => $dto['frente_mts'],
-                    'fondo_mts' => $dto['fondo_mts'],
-                    'habitaciones' => $dto['habitaciones'],
-                    'banos' => $dto['banos'],
-                    'es_esquina' => $dto['es_esquina'],
-                    'direccion' => $dto['direccion'],
-                    'nro_lote' => $dto['nro_lote'],
-                    'colinda_norte' => $dto['colinda_norte'],
-                    'colinda_sur' => $dto['colinda_sur'],
-                    'colinda_este' => $dto['colinda_este'],
-                    'colinda_oeste' => $dto['colinda_oeste'],
-                    'estado' => $estado,
-                    'activo' => $dto['activo'],
-                    'caracteristicas' => array_column($dto['caracteristicas'] ?? [], 'id'),
-                ],
-            ]);
-        } catch (\Throwable $e) {
-            Log::warning("No se pudo sincronizar estado de propiedad {$propiedad->id} hacia el microservicio: {$e->getMessage()}");
-        }
+        app(\App\Services\Remote\LegacyPropertyStateBridge::class)->push($propiedad, $estado);
     }
 }

@@ -37,7 +37,7 @@ class LandingController extends Controller
             'propiedades_destacadas' => $propiedadesDestacadas,
             'ultimas_propiedades'    => $ultimasPropiedades,
             'asesores'               => $asesores,
-            'libelula_enabled'       => (int) env('LIBELULA_ENABLED', 1),
+            'libelula_enabled'       => (int) config('services.libelula.enabled', 1),
         ], 200);
     }
 

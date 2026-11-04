@@ -2,6 +2,16 @@
 
 return [
     'microservice_sync_enabled' => env('MICROSERVICE_SYNC_ENABLED', false),
+    'jwt_secret' => env('JWT_SECRET', ''),
+    'libelula' => [
+        'enabled' => env('LIBELULA_ENABLED', 1),
+        'base_url' => env('LIBELULA_API_URL', 'https://api.libelula.bo'),
+        'api_key' => env('LIBELULA_API_KEY'),
+        'callback_base_url' => env('APP_URL', 'http://localhost:8000'),
+        'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+    ],
+    'comercial' => ['base_url' => env('COMERCIAL_SERVICE_URL', 'http://localhost:5213')],
+    'finanzas' => ['base_url' => env('FINANZAS_SERVICE_URL', 'http://localhost:5214')],
 
     /*
     |--------------------------------------------------------------------------
