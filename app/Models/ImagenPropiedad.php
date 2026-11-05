@@ -14,8 +14,10 @@ class ImagenPropiedad extends Model
     protected $fillable = [
         'propiedad_id',
         'url',
-        'es_principal',
+        'es_principal', 'public_id', 'storage_key', 'content_hash', 'content_type', 'size', 'publicada',
     ];
+
+    protected $hidden = ['storage_key'];
 
     public function propiedad()
     {

@@ -114,7 +114,7 @@ class LandingController extends Controller
      */
     public function getSimilares($id)
     {
-        $propiedad = Propiedad::findOrFail($id);
+        $propiedad = Propiedad::where('activo', true)->findOrFail($id);
 
         $similares = Propiedad::with(['sectorUrbano.distrito.ciudad', 'imagenes', 'caracteristicas'])
             ->where('activo', true)

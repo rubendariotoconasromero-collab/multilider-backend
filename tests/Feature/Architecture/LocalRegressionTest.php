@@ -44,7 +44,9 @@ class LocalRegressionTest extends TestCase
 
     public function test_property_search_filters_pagination_and_detail(): void
     {
-        Sanctum::actingAs($this->user());
+        $user = $this->user();
+        $this->grant($user, 'acceso_propiedades');
+        Sanctum::actingAs($user);
         $property = $this->property();
         $other = $this->property('OTHER-002');
         $sector = DB::table('sectores_urbanos')->find($property->sector_urbano_id);

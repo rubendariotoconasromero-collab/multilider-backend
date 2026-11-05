@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Architecture\ArchitectureMode;
+use App\Architecture\CatalogRoutes;
 use App\Services\Remote\IntegrationException;
 use Closure;
 use Illuminate\Http\Request;
@@ -14,7 +15,10 @@ final class EnsureArchitectureReady
     public function handle(Request $request, Closure $next)
     {
         if (! $this->mode->isLocal()
-            && ! ($request->isMethod('GET') && $request->path() === 'api/propiedades')
+            && ! CatalogRoutes::describe($request)
+            && ! CatalogRoutes::publicTarget($request)
+            && ! (in_array($request->method(), ['GET', 'HEAD'], true) && preg_match('~^api/catalogo/imagenes/[1-9][0-9]*/contenido$~D', $request->path()))
+            && ! ($request->isMethod('GET') && $request->path() === 'api/resolver-url-mapa')
             && ! in_array($request->method().' '.$request->path(), [
                 'POST api/login', 'POST api/logout', 'GET api/me', 'GET api/perfil',
                 'PUT api/perfil', 'PUT api/perfil/cambiar-password',

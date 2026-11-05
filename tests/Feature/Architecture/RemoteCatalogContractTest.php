@@ -3,8 +3,10 @@
 namespace Tests\Feature\Architecture;
 
 use App\Architecture\ArchitectureMode;
+use App\Auth\RemotePrincipal;
 use App\Contracts\Architecture\DelegatedTokenProvider;
 use App\Services\Remote\HttpClientFactory;
+use App\Services\Remote\RemoteAuthenticator;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Psr7\Request as HttpRequest;
 use GuzzleHttp\Psr7\Response;
@@ -26,12 +28,15 @@ class RemoteCatalogContractTest extends TestCase
         Sanctum::actingAs($this->user()); // Only a controlled test identity; actual remote login is F3.
         $fake = new FakeMicroserviceClients($responses);
         $this->app->instance(HttpClientFactory::class, $fake);
-        config(['identity.key'=>'fixture-signing-key-only-for-tests-0123456789']);
+        config(['identity.key' => 'fixture-signing-key-only-for-tests-0123456789']);
         if ($credential) {
-            $this->app->instance(\App\Services\Remote\RemoteAuthenticator::class, new class extends \App\Services\Remote\RemoteAuthenticator {
+            $this->app->instance(RemoteAuthenticator::class, new class extends RemoteAuthenticator
+            {
                 public function __construct() {}
-                public function authenticate(Request $request): ?\App\Auth\RemotePrincipal {
-                    return new \App\Auth\RemotePrincipal(['id'=>1,'correo'=>'fixture@example.test','roles_permisos'=>[]], [], 'fixture.user.signature');
+
+                public function authenticate(Request $request): ?RemotePrincipal
+                {
+                    return new RemotePrincipal(['id' => 1, 'correo' => 'fixture@example.test', 'roles_permisos' => [['rol_permiso' => ['permiso' => ['nombre' => 'acceso_propiedades']]]]], [], 'fixture.user.signature');
                 }
             });
             $this->app->instance(DelegatedTokenProvider::class, new class implements DelegatedTokenProvider
@@ -78,7 +83,9 @@ class RemoteCatalogContractTest extends TestCase
 
     public function test_equivalent_origins_keep_public_listing_fields_and_pagination(): void
     {
-        Sanctum::actingAs($this->user('local-reader@example.test'));
+        $user = $this->user('local-reader@example.test');
+        $this->grant($user, 'acceso_propiedades');
+        Sanctum::actingAs($user);
         $property = $this->property();
         $local = $this->getJson('/api/propiedades?search=TEST&per_page=1')->assertOk()->json();
         $fixture = json_decode(file_get_contents(base_path('tests/Fixtures/propiedades.remote.json')), true);

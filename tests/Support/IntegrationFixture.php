@@ -39,10 +39,11 @@ if ($action === 'prepare') {
         {
             $user = $this->user();
             $user->update(['correo' => 'operator@example.test']);
-            foreach (['acceso_usuarios', 'acceso_roles', 'acceso_permisos', 'acceso_propiedades', 'acceso_ciudades', 'acceso_zonas', 'acceso_caracteristicas', 'acceso_propietarios'] as $permission) {
+            foreach (['acceso_usuarios', 'acceso_roles', 'acceso_permisos', 'acceso_propiedades', 'acceso_ciudades', 'acceso_zonas', 'acceso_caracteristicas', 'acceso_propietarios', 'acceso_ventas'] as $permission) {
                 $this->grant($user, $permission);
             }
-            $this->property('LOCAL-ONLY');
+            $property = $this->property('LOCAL-ONLY');
+            file_put_contents(__DIR__.'/../../storage/framework/testing/local-sale-fixture.json', json_encode($this->salePayload($property)));
         }
     };
     $fixture->seed();
@@ -56,7 +57,7 @@ if ($action === 'prepare') {
     $query = $pdo->prepare('INSERT INTO users(nombre,correo,password,estado) VALUES (?,?,?,1)');
     $query->execute(['Operador remoto ficticio', 'operator@example.test', $hash]);
     $pdo->exec("INSERT INTO roles(nombre,estado) VALUES('Operador',1)");
-    foreach (['acceso_usuarios', 'acceso_roles', 'acceso_permisos', 'acceso_propiedades', 'acceso_ciudades', 'acceso_zonas', 'acceso_caracteristicas', 'acceso_propietarios'] as $permission) {
+    foreach (['acceso_usuarios', 'acceso_roles', 'acceso_permisos', 'acceso_propiedades', 'acceso_ciudades', 'acceso_zonas', 'acceso_caracteristicas', 'acceso_propietarios', 'acceso_ventas'] as $permission) {
         $q = $pdo->prepare('INSERT INTO permisos(nombre,estado) VALUES(?,1)');
         $q->execute([$permission]);
         $perm = $pdo->lastInsertId();
@@ -71,10 +72,10 @@ if ($action === 'prepare') {
     if (! $user || $user['correo'] !== 'operator@example.test' || ! Hash::check('Test-only-Password-42!', $user['password']) || (int) $user['auth_version'] !== 0) {
         throw new RuntimeException('Existing identity changed during migration.');
     }
-    if ((int) $pdo->query('SELECT COUNT(*) FROM rol_permiso_usuario')->fetchColumn() !== 8) {
+    if ((int) $pdo->query('SELECT COUNT(*) FROM rol_permiso_usuario')->fetchColumn() !== 9) {
         throw new RuntimeException('Assignments changed.');
     }
-    echo "Additive MySQL migration preserved user hash and eight assignments.\n";
+    echo "Additive MySQL migration preserved user hash and nine assignments.\n";
 } else {
     throw new RuntimeException('Unknown fixture operation.');
 }

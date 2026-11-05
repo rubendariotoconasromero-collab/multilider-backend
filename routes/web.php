@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\CatalogController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -16,3 +17,6 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', function () {
     return view('welcome');
 });
+
+Route::get('/catalogo/media/{id}/{revision}', [CatalogController::class, 'publicImage'])
+    ->whereUuid('id')->where('revision', '[a-fA-F0-9]{64}');

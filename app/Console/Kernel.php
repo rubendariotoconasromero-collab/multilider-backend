@@ -2,6 +2,7 @@
 
 namespace App\Console;
 
+use App\Architecture\ArchitectureMode;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 
@@ -12,8 +13,11 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        if (!app(\App\Architecture\ArchitectureMode::class)->isLocal()) {
+        if (! app(ArchitectureMode::class)->isLocal()) {
             $schedule->command('identity:retry-revocations')->everyMinute()->withoutOverlapping();
+        }
+        if (app(ArchitectureMode::class)->isLocal()) {
+            $schedule->command('catalogo:limpiar-imagenes')->everyFifteenMinutes()->withoutOverlapping();
         }
         // F2: legacy upserts must not overwrite business tables in either mode.
         // Register new projection jobs only after their identity/ownership is defined.

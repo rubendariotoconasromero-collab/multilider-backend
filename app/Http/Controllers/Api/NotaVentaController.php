@@ -75,7 +75,7 @@ class NotaVentaController extends Controller
         try {
             DB::beginTransaction();
 
-            $propiedad = Propiedad::findOrFail($validatedData['propiedad_id']);
+            $propiedad = Propiedad::lockForUpdate()->findOrFail($validatedData['propiedad_id']);
             if ($propiedad->estado === 'Vendido') {
                 DB::rollBack();
                 return response()->json(['message' => 'Esta propiedad ya fue vendida.'], 400);
@@ -188,7 +188,7 @@ class NotaVentaController extends Controller
         try {
             DB::beginTransaction();
 
-            $venta = NotaVenta::findOrFail($id);
+            $venta = NotaVenta::lockForUpdate()->findOrFail($id);
             
             if ($venta->estado === 'Anulada') {
                 DB::rollBack();
@@ -199,7 +199,7 @@ class NotaVentaController extends Controller
             $venta->update(['estado' => 'Anulada']);
 
             // 2. Liberamos la propiedad
-            $propiedad = Propiedad::findOrFail($venta->propiedad_id);
+            $propiedad = Propiedad::lockForUpdate()->findOrFail($venta->propiedad_id);
             $propiedad->update(['estado' => 'Disponible']);
             $this->pushEstadoAMicroservicio($propiedad, 'Disponible');
 

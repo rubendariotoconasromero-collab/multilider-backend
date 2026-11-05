@@ -6,7 +6,6 @@ use App\Architecture\ArchitectureMode;
 use App\Contracts\Architecture\CatalogGateway;
 use App\Contracts\Architecture\CommercialGateway;
 use App\Contracts\Architecture\FinanceGateway;
-use App\Contracts\Architecture\IdentityGateway;
 use App\Jobs\EnviarCorreoMasivoJob;
 use App\Services\Local\LocalCatalogGateway;
 use App\Services\Local\LocalDomainGateway;
@@ -63,7 +62,9 @@ class ArchitectureModeTest extends TestCase
         $this->app->instance(HttpClientFactory::class, $fake);
         config(['services.microservice_sync_enabled' => true, 'services.seguridad.base_url' => null,
             'services.propiedades.base_url' => 'not-a-url', 'services.jwt_secret' => '']);
-        Sanctum::actingAs($this->user());
+        $catalogUser = $this->user();
+        $this->grant($catalogUser, 'acceso_propiedades');
+        Sanctum::actingAs($catalogUser);
         $property = $this->property();
         $id = $this->postJson('/api/ventas', $this->salePayload($property))->assertCreated()->json('data.id');
         $this->putJson("/api/ventas/$id/anular")->assertOk();
@@ -115,8 +116,8 @@ class ArchitectureModeTest extends TestCase
     public static function incompleteRoutes(): array
     {
         return [['POST', '/api/ventas'], ['PUT', '/api/ventas/1/anular'],
-            ['POST', '/api/propiedades'], ['POST', '/api/pagos/1/procesar'], ['POST', '/api/public/pagos/callback'],
-            ['GET', '/api/propiedades/1'], ['GET', '/api/landing'], ['POST', '/api/reportes/enviar-informe']];
+            ['POST', '/api/pagos/1/procesar'], ['POST', '/api/public/pagos/callback'],
+            ['GET', '/api/landing'], ['POST', '/api/reportes/enviar-informe']];
     }
 
     public function test_repeated_sale_or_cancellation_closes_its_transaction(): void
