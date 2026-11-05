@@ -66,6 +66,17 @@ if ($action === 'prepare') {
         $pdo->exec("INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id) VALUES(1,$link)");
     }
     echo "Isolated local and pre-F3 identity fixtures prepared.\n";
+} elseif ($action === 'phase5') {
+    $pdo = identityDb();
+    $localGrants = new class { use BusinessFixtures; public function add(string $name): void { $this->grant(\App\Models\User::where('correo', 'operator@example.test')->firstOrFail(), $name); } };
+    foreach (['acceso_clientes', 'acceso_asesores', 'acceso_historial_ventas', 'acceso_contratos', 'acceso_entregas', 'acceso_pagos', 'acceso_ingresos', 'acceso_egresos'] as $name) {
+        $localGrants->add($name);
+        $q = $pdo->prepare('INSERT INTO permisos(nombre,estado) VALUES(?,1)'); $q->execute([$name]); $permission = $pdo->lastInsertId();
+        $pdo->exec("INSERT INTO rol_permiso(rol_id,permiso_id) VALUES(1,$permission)"); $link = $pdo->lastInsertId();
+        $pdo->exec("INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id) VALUES(1,$link)");
+    }
+    $pdo->exec("INSERT INTO roles(nombre,estado) VALUES('Cliente',1),('Asesor de Ventas',1)");
+    echo "F5 role and permission fixtures prepared.\n";
 } elseif ($action === 'verify-migration') {
     $pdo = identityDb();
     $user = $pdo->query('SELECT * FROM users WHERE id=1')->fetch(PDO::FETCH_ASSOC);

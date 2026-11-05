@@ -3,6 +3,9 @@ param(
     [switch]$Integration,
     [switch]$BrowserTests,
     [switch]$IntegrationOnly,
+    [switch]$Phase5,
+    [switch]$RecoveryTests,
+    [switch]$RestoreTests,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$TestArguments
 )
 $ErrorActionPreference = 'Stop'
@@ -62,12 +65,13 @@ try {
             $result = $LASTEXITCODE
         }
         if ($result -eq 0 -and $Integration) {
-            & (Join-Path $PSScriptRoot 'integration-f3.ps1') -BrowserTests:$BrowserTests
+            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -MySqlBin $MySqlBin }
+            else { & (Join-Path $PSScriptRoot 'integration-f3.ps1') -BrowserTests:$BrowserTests }
             $result = $LASTEXITCODE
         }
     } finally { Pop-Location }
 } finally {
-    foreach ($key in $old.Keys) { [Environment]::SetEnvironmentVariable($key, $old[$key], 'Process') }
+    foreach ($key in $old.Keys) { if ($null -eq $old[$key]) { Remove-Item -LiteralPath "Env:$key" -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable($key, $old[$key], 'Process') } }
     if (!$process.HasExited) {
         & $client --no-defaults --host=127.0.0.1 "--port=$port" --user=root --skip-password --execute=SHUTDOWN 2>$null | Out-Null
         if (!$process.WaitForExit(10000)) { Stop-Process -Id $process.Id }

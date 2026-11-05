@@ -8,12 +8,13 @@ class Cuota extends Model
 {
     use HasFactory;
     protected $table = 'cuotas';
-    protected $fillable = ['plan_pago_id', 'numero_cuota', 'fecha_vencimiento', 'monto_cuota', 'monto_interes', 'monto_capital', 'saldo_capital', 'estado', 'reprogramacion_id'];
+    protected $fillable = ['plan_pago_id', 'numero_cuota', 'fecha_vencimiento', 'monto_cuota', 'monto_interes', 'monto_capital', 'saldo_capital', 'estado', 'reprogramacion_id', 'interes_acreditado'];
 
     protected $casts = [
         'fecha_vencimiento' => 'date',
         'monto_cuota' => 'decimal:2',
         'monto_interes' => 'decimal:2',
+        'interes_acreditado' => 'decimal:2',
         'monto_capital' => 'decimal:2',
         'saldo_capital' => 'decimal:2',
     ];

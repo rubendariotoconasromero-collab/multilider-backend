@@ -40,7 +40,7 @@ final class ArchitectureServiceProvider extends ServiceProvider
         $this->app->singleton(ArchitectureMode::class, fn ($app) => new ArchitectureMode($app['config']->get('architecture.mode', 'local')));
         $this->app->bind(CatalogGateway::class, fn ($app) => $app->make($app->make(ArchitectureMode::class)->isLocal() ? LocalCatalogGateway::class : RemoteCatalogGateway::class));
         foreach ([CommercialGateway::class, FinanceGateway::class] as $contract) {
-            $this->app->bind($contract, fn ($app) => $app->make($app->make(ArchitectureMode::class)->isLocal() ? LocalDomainGateway::class : PendingDomainGateway::class));
+            $this->app->bind($contract, fn ($app) => $app->make($app->make(ArchitectureMode::class)->isLocal() ? LocalDomainGateway::class : \App\Services\Remote\RemoteDomainGateway::class));
         }
         $this->app->bind(IdentityGateway::class, fn ($app) => $app->make($app->make(ArchitectureMode::class)->isLocal()
             ? LocalIdentityGateway::class : RemoteIdentityGateway::class));

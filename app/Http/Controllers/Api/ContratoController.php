@@ -142,6 +142,11 @@ class ContratoController extends Controller
             'notaVenta.propiedad.sectorUrbano.distrito.ciudad',
         ])->findOrFail($id);
 
+        return $this->renderContract($contrato);
+    }
+
+    public function renderContract(object $contrato)
+    {
         $nv          = $contrato->notaVenta;
         $cliente     = $nv->cliente;
         $propiedad   = $nv->propiedad;
@@ -152,11 +157,12 @@ class ContratoController extends Controller
 
         $monto       = floatval($nv->monto_liquido ?? $nv->monto_total ?? 0);
         $montoLiteral = $this->numeroALetras($monto);
+        $monedaLabel = in_array($propiedad->moneda, ['USD', '$'], true) ? 'USD' : 'Bs.';
 
         $html = view('contratos.plantilla', compact(
             'contrato', 'nv', 'cliente', 'propiedad',
             'propietarios', 'sector', 'distrito', 'ciudad',
-            'montoLiteral'
+            'montoLiteral', 'monedaLabel'
         ))->render();
 
         $mpdf = $this->makeMpdf([

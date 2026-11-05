@@ -42,6 +42,7 @@ class Kernel extends HttpKernel
             \App\Http\Middleware\EnsureArchitectureReady::class,
             // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
             \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+            \App\Http\Middleware\PublicPaymentDispatch::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
     ];

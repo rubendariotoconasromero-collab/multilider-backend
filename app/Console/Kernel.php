@@ -18,6 +18,9 @@ class Kernel extends ConsoleKernel
         }
         if (app(ArchitectureMode::class)->isLocal()) {
             $schedule->command('catalogo:limpiar-imagenes')->everyFifteenMinutes()->withoutOverlapping();
+            if (config('services.libelula.reconciliation_enabled', false)) {
+                $schedule->command('payments:reconcile-tests')->everyMinute()->withoutOverlapping();
+            }
         }
         // F2: legacy upserts must not overwrite business tables in either mode.
         // Register new projection jobs only after their identity/ownership is defined.

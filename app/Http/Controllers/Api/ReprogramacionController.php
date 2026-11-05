@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\PlanPago;
 use App\Services\AmortizacionService;
+use App\Services\InstallmentBalances;
 use App\Services\ReprogramacionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -29,7 +30,7 @@ class ReprogramacionController extends Controller
             'fecha_reprogramacion'=> 'required|date',
             'cuota_desde'         => 'required|integer|min:1',
             'nueva_tasa_interes'  => 'required|numeric|min:0|max:100',
-            'nuevo_numero_cuotas' => 'required|integer|min:1',
+            'nuevo_numero_cuotas' => 'required|integer|min:1|max:600',
             'nueva_fecha_inicio'  => 'required|date',
             'observaciones'       => 'nullable|string|max:1000',
         ]);
@@ -55,6 +56,7 @@ class ReprogramacionController extends Controller
                 'plan_pago'      => $plan->fresh()->load('cuotas', 'reprogramaciones.usuario'),
             ], 201);
 
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e) { throw $e;
         } catch (\Exception $e) {
             return response()->json([
                 'message' => 'Error al reprogramar: ' . $e->getMessage()
@@ -102,6 +104,7 @@ class ReprogramacionController extends Controller
 
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e) { throw $e;
         } catch (\Exception $e) {
             return response()->json(['message' => 'Error al amortizar: ' . $e->getMessage()], 500);
         }
@@ -132,14 +135,16 @@ class ReprogramacionController extends Controller
         $plan = PlanPago::with([
             'cuotas',
             'reprogramaciones' => function ($q) {
-                $q->with('usuario:id,name')->orderBy('fecha_reprogramacion');
+                $q->with('usuario:id,nombre')->orderBy('fecha_reprogramacion');
             }
         ])->where('nota_venta_id', $ventaId)->firstOrFail();
 
         $cuotasPagadas    = $plan->cuotas->where('estado', 'Pagada')->count();
         $cuotasPendientes = $plan->cuotas->whereIn('estado', ['Pendiente', 'Vencida'])->count();
-        $totalPagado      = $plan->cuotas->where('estado', 'Pagada')->sum('monto_cuota');
-        $totalPendiente   = $plan->cuotas->whereIn('estado', ['Pendiente', 'Vencida'])->sum('monto_cuota');
+        $balances = InstallmentBalances::forPlan($plan, $plan->cuotas);
+        $totalPagado = $balances->sum('monto_pagado');
+        $totalPendiente = $plan->cuotas->whereIn('estado', ['Pendiente', 'Vencida'])->sum(fn ($q) => $balances[$q->id]['monto_pendiente']);
+        $plan->cuotas->each(fn ($quota) => $quota->forceFill($balances[$quota->id]));
         $saldoCapital     = $this->amortizacionService->saldoCapitalActual($plan);
 
         return response()->json([

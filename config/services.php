@@ -4,6 +4,7 @@ return [
     'microservice_sync_enabled' => env('MICROSERVICE_SYNC_ENABLED', false),
     'jwt_secret' => env('JWT_SECRET', ''),
     'libelula' => [
+        'reconciliation_enabled' => env('LIBELULA_RECONCILIATION_ENABLED', false),
         'enabled' => env('LIBELULA_ENABLED', 1),
         'base_url' => env('LIBELULA_API_URL', 'https://api.libelula.bo'),
         'api_key' => env('LIBELULA_API_KEY'),

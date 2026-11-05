@@ -44,7 +44,7 @@ class ArchitectureModeTest extends TestCase
         $this->mode('microservices');
         $this->assertInstanceOf(RemoteCatalogGateway::class, app(CatalogGateway::class));
         foreach ([CommercialGateway::class, FinanceGateway::class] as $contract) {
-            $this->assertInstanceOf(PendingDomainGateway::class, app($contract));
+            $this->assertInstanceOf(\App\Services\Remote\RemoteDomainGateway::class, app($contract));
         }
     }
 

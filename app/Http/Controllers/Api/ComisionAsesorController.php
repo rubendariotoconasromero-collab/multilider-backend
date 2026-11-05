@@ -155,6 +155,11 @@ class ComisionAsesorController extends Controller
             'registradoPor',
         ])->findOrFail($egresoId);
 
+        return $this->renderReceipt($egreso);
+    }
+
+    public function renderReceipt(Egreso $egreso)
+    {
         if ($egreso->estado !== 'PAGADO') {
             return response()->json(['message' => 'Solo se puede generar comprobante de comisiones pagadas.'], 422);
         }

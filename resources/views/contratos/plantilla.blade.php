@@ -6,7 +6,7 @@
   body {
     font-family: DejaVu Sans, Arial, sans-serif;
     font-size: 10.5pt;
-    line-height: 1.65;
+    line-height: 1.5;
     color: #111;
     margin: 0;
     padding: 0;
@@ -22,7 +22,7 @@
     font-size: 11pt;
     font-weight: bold;
     text-transform: uppercase;
-    margin: 18px 0 6px 0;
+    margin: 14px 0 6px 0;
     border-bottom: 1px solid #555;
     padding-bottom: 3px;
   }
@@ -37,10 +37,10 @@
     text-align: justify;
   }
   .clausula {
-    margin-bottom: 14px;
+    margin-bottom: 12px;
   }
   .firma-bloque {
-    margin-top: 50px;
+    margin-top: 30px;
   }
   .firma-tabla {
     width: 100%;
@@ -53,7 +53,7 @@
   .firma-linea {
     border-top: 1px solid #333;
     width: 200px;
-    margin-top: 35px;
+    margin-top: 25px;
     margin-bottom: 4px;
   }
   .dato-campo {
@@ -63,7 +63,7 @@
   .separador {
     border: none;
     border-top: 1px dashed #aaa;
-    margin: 16px 0;
+    margin: 12px 0;
   }
   .monto-destacado {
     font-size: 11pt;
@@ -193,17 +193,17 @@
   </p>
 
   <p class="monto-destacado" style="margin: 10px 0 4px 0; text-align: center;">
-    Bs. {{ number_format($nv->monto_liquido ?? $nv->monto_total, 2, '.', ',') }}
+    {{ $monedaLabel ?? 'Bs.' }} {{ number_format($nv->monto_liquido ?? $nv->monto_total, 2, '.', ',') }}
   </p>
   <p style="text-align: center;">
-    (<strong>{{ $montoLiteral }} BOLIVIANOS</strong>)
+    (<strong>{{ $montoLiteral }} {{ $monedaLabel === 'USD' ? 'DÓLARES ESTADOUNIDENSES' : 'BOLIVIANOS' }}</strong>)
   </p>
 
   @if($nv->tipo_venta === 'CREDITO' || $nv->tipo_venta === 'CRÉDITO')
   <p>
     La venta se realiza a <strong>CRÉDITO</strong>, con una cuota inicial de
-    <span class="dato-campo">Bs. {{ number_format($nv->cuota_inicial ?? 0, 2, '.', ',') }}</span>
-    y un saldo de <span class="dato-campo">Bs. {{ number_format($nv->saldo_credito ?? 0, 2, '.', ',') }}</span>
+    <span class="dato-campo">{{ $monedaLabel ?? 'Bs.' }} {{ number_format($nv->cuota_inicial ?? 0, 2, '.', ',') }}</span>
+    y un saldo de <span class="dato-campo">{{ $monedaLabel ?? 'Bs.' }} {{ number_format($nv->saldo_credito ?? 0, 2, '.', ',') }}</span>
     a ser cancelado conforme al plan de pagos acordado.
   </p>
   @else

@@ -75,7 +75,7 @@ class MoraService
                 'concepto'           => 'Mora cuota #' . $cuota->numero_cuota . ' - VTA #' . $plan->nota_venta_id,
                 'categoria'          => 'MORA',
                 'monto'              => $montoMora,
-                'moneda'             => 'Bs',
+                'moneda'             => in_array($plan->notaVenta->propiedad?->moneda, ['USD', '$'], true) ? '$' : 'Bs',
                 'origen'             => 'AUTOMATICO',
                 'pago_id'            => $pago->id,
                 'nota_venta_id'      => $plan->nota_venta_id,

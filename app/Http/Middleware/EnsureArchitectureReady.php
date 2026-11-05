@@ -15,6 +15,9 @@ final class EnsureArchitectureReady
     public function handle(Request $request, Closure $next)
     {
         if (! $this->mode->isLocal()
+            && ! (config('architecture.business_enabled') && \App\Architecture\BusinessRoutes::describe($request))
+            && ! (config('architecture.business_enabled') && $request->isMethod('GET') && $request->path() === 'api/comercial/opciones')
+            && ! (config('architecture.business_enabled') && \App\Architecture\PublicPaymentRoutes::target($request))
             && ! CatalogRoutes::describe($request)
             && ! CatalogRoutes::publicTarget($request)
             && ! (in_array($request->method(), ['GET', 'HEAD'], true) && preg_match('~^api/catalogo/imagenes/[1-9][0-9]*/contenido$~D', $request->path()))
@@ -22,6 +25,7 @@ final class EnsureArchitectureReady
             && ! in_array($request->method().' '.$request->path(), [
                 'POST api/login', 'POST api/logout', 'GET api/me', 'GET api/perfil',
                 'PUT api/perfil', 'PUT api/perfil/cambiar-password',
+                'GET api/empresa/datos', 'POST api/empresa',
             ], true)
             && ! $request->is('api/perfil/correo/*')
             && ! preg_match('~^api/(usuarios|roles|permisos|asignar-permisos)(/|$)~', $request->path())) {

@@ -179,5 +179,5 @@ try {
     $releaseParent=[IO.Path]::GetFullPath($runtime)
     if([IO.Path]::GetDirectoryName($releaseTarget) -ne $releaseParent -or [IO.Path]::GetFileName($releaseTarget) -notmatch '^release-propiedades-f4-[a-f0-9]{32}$'){throw 'Unsafe release fixture cleanup.'}
     if(Test-Path -LiteralPath $releaseTarget){Remove-Item -LiteralPath $releaseTarget -Recurse -Force}
-    foreach($name in $previous.Keys){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    foreach($name in $previous.Keys){if($null -eq $previous[$name]){Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
 }

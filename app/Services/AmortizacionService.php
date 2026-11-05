@@ -22,6 +22,8 @@ class AmortizacionService
     {
         return DB::transaction(function () use ($plan, $datos, $usuarioId) {
 
+            $sale = NotaVenta::with('propiedad')->lockForUpdate()->findOrFail($plan->nota_venta_id);
+            abort_unless(in_array($sale->estado, ['Completada', 'Activa'], true), 409, 'La venta no está operativa.');
             $monto = (float) $datos['monto'];
 
             // 1. Calcular saldo capital actual
@@ -52,7 +54,7 @@ class AmortizacionService
                 'concepto'           => 'Amortización de capital - VTA #' . $plan->nota_venta_id,
                 'categoria'          => 'CUOTA',
                 'monto'              => $monto,
-                'moneda'             => 'Bs',
+                'moneda'             => in_array($sale->propiedad?->moneda, ['USD', '$'], true) ? '$' : 'Bs',
                 'origen'             => 'AUTOMATICO',
                 'pago_id'            => $pago->id,
                 'nota_venta_id'      => $plan->nota_venta_id,
@@ -80,11 +82,7 @@ class AmortizacionService
      */
     public function saldoCapitalActual(PlanPago $plan): float
     {
-        $suma = $plan->cuotas()
-            ->whereIn('estado', ['Pendiente', 'Vencida'])
-            ->sum('monto_capital');
-
-        return round((float) $suma, 2);
+        return InstallmentBalances::outstandingCapital($plan);
     }
 
     /**
@@ -102,36 +100,22 @@ class AmortizacionService
             return;
         }
 
-        $meses       = $cuotasPendientes->count();
-        $tasaMensual = ($plan->tasa_interes / 100) / 12;
-        $saldo       = $nuevoCapital;
-
-        if ($tasaMensual > 0) {
-            $cuotaFija = $nuevoCapital
-                * ($tasaMensual * pow(1 + $tasaMensual, $meses))
-                / (pow(1 + $tasaMensual, $meses) - 1);
-        } else {
-            $cuotaFija = $nuevoCapital / $meses;
-        }
-
-        foreach ($cuotasPendientes as $i => $cuota) {
-            $interesMes = $saldo * $tasaMensual;
-            $capitalMes = $cuotaFija - $interesMes;
-
-            // Ajuste de redondeo en la última cuota
-            if ($i === $meses - 1) {
-                $capitalMes = $saldo;
-                $cuotaFija  = $capitalMes + $interesMes;
+        $balances = InstallmentBalances::forPlan($plan, $cuotasPendientes);
+        $schedule = FrenchInstallmentSchedule::amounts($nuevoCapital, $cuotasPendientes->count(), (float) $plan->tasa_interes);
+        foreach ($cuotasPendientes as $index => $cuota) {
+            $next = $schedule[$index];
+            // Same due date: carry the interest credit through subsequent amortizations.
+            $credit = round((float) $cuota->interes_acreditado + $balances[$cuota->id]['interes_pagado'], 2);
+            if ($credit > 0) {
+                $next['interes_acreditado'] = $credit;
+                $next['monto_interes'] = round(max(0, $next['monto_interes'] - $credit), 2);
+                $next['monto_cuota'] = round($next['monto_capital'] + $next['monto_interes'], 2);
             }
-
-            $saldo -= $capitalMes;
-
-            $cuota->update([
-                'monto_cuota'   => round($cuotaFija, 2),
-                'monto_interes' => round($interesMes, 2),
-                'monto_capital' => round($capitalMes, 2),
-                'saldo_capital' => round(max(0, $saldo), 2),
-            ]);
+            if ($balances[$cuota->id]['monto_pagado'] > 0) {
+                $replacement = $cuota->replicate();
+                $cuota->update(['estado' => 'Reprogramada']);
+                $replacement->fill($next)->save();
+            } else { $cuota->update($next); }
         }
     }
 }

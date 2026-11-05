@@ -62,6 +62,7 @@ Route::prefix('public')->group(function () {
 });
 
 Route::get('/landing', [LandingController::class, 'getLandingData']);
+Route::get('/empresa/datos', [LandingController::class, 'getCompanyData']);
 Route::get('/landing/propiedades', [LandingController::class, 'getPropiedades'])->middleware(PublicCatalog::class);
 Route::get('/landing/propiedades/{id}', [LandingController::class, 'getPropiedad'])->middleware(PublicCatalog::class);
 Route::get('/landing/propiedades/{id}/similares', [LandingController::class, 'getSimilares'])->middleware(PublicCatalog::class);
@@ -73,7 +74,11 @@ Route::post('/login', [AuthController::class, 'login']);
 
 Route::post('/logout', [AuthController::class, 'logout']);
 
-Route::middleware('auth:architecture')->group(function () {
+Route::middleware(['auth:architecture', \App\Http\Middleware\BusinessDispatch::class, \App\Http\Middleware\LocalBusinessCommands::class])->group(function () {
+    Route::get('comercial/opciones', [\App\Http\Controllers\Api\CommercialOptionsController::class, 'index'])->middleware('permission:acceso_ventas');
+    Route::get('operaciones', [\App\Http\Controllers\Api\OperationController::class, 'index']);
+    Route::get('operaciones/{id}', [\App\Http\Controllers\Api\OperationController::class, 'show'])->whereUuid('id');
+    Route::post('operaciones/{id}/reintentar', [\App\Http\Controllers\Api\OperationController::class, 'retry'])->whereUuid('id');
 
     // Utilidad: resolver URL acortada de Google Maps
     Route::get('/resolver-url-mapa', fn (Request $request, MapsUrlResolver $resolver) => $resolver->resolve($request));
@@ -156,6 +161,7 @@ Route::middleware('auth:architecture')->group(function () {
     Route::patch('imagenes-propiedades/{id}/principal', [ImagenPropiedadController::class, 'setPrincipal'])->middleware(CatalogAdministration::class);
 
     Route::apiResource('asesores', AsesorController::class);
+    Route::get('asesores/{id}/foto', [\App\Http\Controllers\Api\BusinessAssetController::class, 'photo'])->middleware('permission:acceso_asesores');
     Route::apiResource('clientes', ClienteController::class);
     Route::apiResource('ciudades', CiudadController::class)->middleware(CatalogAdministration::class);
     Route::apiResource('distritos', DistritoController::class)->middleware(CatalogAdministration::class);

@@ -63,7 +63,7 @@ class NotaVentaController extends Controller
             // Crédito (Agregamos validaciones para el plan de pagos)
             'cuota_inicial'  => 'required_if:tipo_venta,CREDITO|nullable|numeric|min:0',
             'saldo_credito'  => 'required_if:tipo_venta,CREDITO|nullable|numeric|min:0',
-            'numero_cuotas'  => 'required_if:tipo_venta,CREDITO|nullable|integer|min:1',
+            'numero_cuotas'  => 'required_if:tipo_venta,CREDITO|nullable|integer|min:1|max:600',
             'tasa_interes'   => 'required_if:tipo_venta,CREDITO|nullable|numeric|min:0',
             'tasa_mora'        => 'nullable|numeric|min:0|max:100',
             'fecha_inicio_pago'=> 'required_if:tipo_venta,CREDITO|nullable|date',
@@ -234,48 +234,12 @@ class NotaVentaController extends Controller
             'tasa_mora'     => $tasaMora,
         ]);
 
-        // 2. Cálculos Matemáticos
-        $tasaMensual = ($tasaAnual / 100) / 12;
-        $saldoSobrante = $capitalPrestado;
         $fechaVencimiento = Carbon::parse($fechaInicio);
-
-        // Si la tasa es > 0 aplicamos fórmula francesa, si es 0 es división simple
-        if ($tasaMensual > 0) {
-            $cuotaFija = $capitalPrestado * ($tasaMensual * pow(1 + $tasaMensual, $meses)) / (pow(1 + $tasaMensual, $meses) - 1);
-        } else {
-            $cuotaFija = $capitalPrestado / $meses;
-        }
-
-        // 3. Generar e insertar las cuotas mes a mes
         $cuotasInsert = [];
-        for ($i = 1; $i <= $meses; $i++) {
-            
-            $interesMes = $saldoSobrante * $tasaMensual;
-            $capitalMes = $cuotaFija - $interesMes;
-            
-            // Ajuste por redondeo en la última cuota
-            if ($i == $meses) {
-                $capitalMes = $saldoSobrante;
-                $cuotaFija = $capitalMes + $interesMes;
-            }
-
-            $saldoSobrante -= $capitalMes;
-
-            $cuotasInsert[] = [
-                'plan_pago_id'      => $plan->id,
-                'numero_cuota'      => $i,
-                'fecha_vencimiento' => $fechaVencimiento->format('Y-m-d'),
-                'monto_cuota'       => round($cuotaFija, 2),
-                'monto_interes'     => round($interesMes, 2),
-                'monto_capital'     => round($capitalMes, 2),
-                'saldo_capital'     => round(max(0, $saldoSobrante), 2),
-                'estado'            => 'Pendiente',
-                'created_at'        => now(),
-                'updated_at'        => now()
-            ];
-
-            // Sumamos un mes para la siguiente cuota
-            $fechaVencimiento->addMonth(); 
+        foreach (\App\Services\FrenchInstallmentSchedule::amounts($capitalPrestado, $meses, $tasaAnual) as $index => $amounts) {
+            $cuotasInsert[] = $amounts + ['plan_pago_id' => $plan->id, 'numero_cuota' => $index + 1,
+                'fecha_vencimiento' => $fechaVencimiento->format('Y-m-d'), 'estado' => 'Pendiente', 'created_at' => now(), 'updated_at' => now()];
+            $fechaVencimiento->addMonth();
         }
 
         // Inserción masiva para máxima eficiencia en la BD

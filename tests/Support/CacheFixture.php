@@ -9,7 +9,7 @@ $root = realpath(__DIR__.'/../../storage/framework/testing');
 $relative = getenv('APP_CONFIG_CACHE');
 $path = $root.DIRECTORY_SEPARATOR.basename($relative);
 if (getenv('MULTILIDER_TEST_ISOLATED') !== '1' || getenv('DB_DATABASE') !== 'multilider_tests_isolated'
-    || ! $root || ! in_array($relative, ['storage/framework/testing/live-local-config.php', 'storage/framework/testing/live-remote-config.php'], true)) {
+    || ! $root || ! in_array($relative, ['storage/framework/testing/live-local-config.php', 'storage/framework/testing/live-remote-config.php', 'storage/framework/testing/f5-remote-config.php', 'storage/framework/testing/f5-local-config.php'], true)) {
     throw new RuntimeException('Unsafe configuration fixture.');
 }
 if (is_file($path)) {

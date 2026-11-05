@@ -11,6 +11,14 @@ use Illuminate\Support\Facades\Storage;
 
 class LandingController extends Controller
 {
+    public function getCompanyData()
+    {
+        $local = app(\App\Architecture\ArchitectureMode::class)->isLocal();
+        $payments = $local ? true
+            : config('architecture.business_enabled') && config('architecture.public_test_payments_enabled');
+        return response()->json(['empresa' => MiEmpresa::first(), 'libelula_enabled' => (int) config('services.libelula.enabled', 1), 'pagos_prueba_disponibles' => (bool) $payments]);
+    }
+
     /**
      * Obtiene toda la información necesaria para la Landing Page en una sola petición.
      */
@@ -198,6 +206,13 @@ class LandingController extends Controller
             'hero_subtitle_2' => 'nullable|string|max:255',
             'hero_title_3' => 'nullable|string|max:255',
             'hero_subtitle_3' => 'nullable|string|max:255',
+            'logo' => 'nullable|image|mimes:jpeg,jpg,png,webp,gif|max:5120',
+            'logo_login' => 'nullable|image|mimes:jpeg,jpg,png,webp,gif|max:5120',
+            'logo_sidebar' => 'nullable|image|mimes:jpeg,jpg,png,webp,gif|max:5120',
+            'logo_sidebar_compact' => 'nullable|image|mimes:jpeg,jpg,png,webp,gif|max:5120',
+            'hero_image_1' => 'nullable|image|mimes:jpeg,jpg,png,webp,gif|max:5120',
+            'hero_image_2' => 'nullable|image|mimes:jpeg,jpg,png,webp,gif|max:5120',
+            'hero_image_3' => 'nullable|image|mimes:jpeg,jpg,png,webp,gif|max:5120',
         ]);
 
         // Procesar Archivos de Imagen
@@ -205,11 +220,8 @@ class LandingController extends Controller
 
         foreach ($imageFields as $field) {
             if ($request->hasFile($field)) {
-                // Eliminar anterior si existe
-                if ($empresa->$field) {
-                    Storage::disk('public')->delete(str_replace('/storage/', '', $empresa->$field));
-                }
                 $path = $request->file($field)->store('empresa', 'public');
+                abort_unless(is_string($path) && $path !== '', 503, 'No se pudo guardar la imagen.');
                 $validatedData[$field] = Storage::url($path);
             }
         }

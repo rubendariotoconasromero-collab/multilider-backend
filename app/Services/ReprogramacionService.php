@@ -21,14 +21,14 @@ class ReprogramacionService
     {
         return DB::transaction(function () use ($plan, $datos, $usuarioId) {
 
+            abort_unless(in_array($plan->notaVenta->estado, ['Completada', 'Activa'], true), 409, 'La venta no está operativa.');
             $cuotaDesde      = (int) $datos['cuota_desde'];
             $nuevaTasa       = (float) $datos['nueva_tasa_interes'];
             $nuevasCuotas    = (int) $datos['nuevo_numero_cuotas'];
             $nuevaFechaInicio = Carbon::parse($datos['nueva_fecha_inicio']);
 
-            // 1. Calcular saldo capital: saldo_capital de la cuota ANTERIOR a cuota_desde
-            //    Si se reprograma desde la cuota 1, el saldo es el monto original del plan.
-            $saldoCapital = $this->calcularSaldoCapital($plan, $cuotaDesde);
+            $saldoCapital = InstallmentBalances::outstandingCapital($plan, $cuotaDesde);
+            abort_unless($saldoCapital > 0, 422, 'El tramo seleccionado no tiene capital pendiente.');
 
             // 2. Marcar como Reprogramada todas las cuotas pendientes desde cuota_desde
             $plan->cuotas()
@@ -56,33 +56,14 @@ class ReprogramacionService
             // 5. Actualizar metadatos del plan de pagos
             $ultimaFecha = $nuevaFechaInicio->copy()->addMonths($nuevasCuotas - 1);
             $plan->update([
-                'numero_cuotas' => $plan->cuotas()->count(),
+                'numero_cuotas' => $plan->cuotas()->whereNotIn('estado', ['Reprogramada', 'Anulada'])->count(),
                 'tasa_interes'  => $nuevaTasa,
                 'fecha_final'   => $ultimaFecha->toDateString(),
             ]);
 
+            $plan->notaVenta->update(['saldo_credito' => InstallmentBalances::outstandingCapital($plan)]);
             return $reprogramacion->load('cuotas', 'usuario');
         });
-    }
-
-    private function calcularSaldoCapital(PlanPago $plan, int $cuotaDesde): float
-    {
-        if ($cuotaDesde === 1) {
-            return (float) $plan->monto;
-        }
-
-        // El saldo capital correcto es el saldo_capital de la última cuota PAGADA
-        // justo antes de cuota_desde, o el de la cuota anterior si no hay pagadas.
-        $cuotaAnterior = $plan->cuotas()
-            ->where('numero_cuota', $cuotaDesde - 1)
-            ->first();
-
-        if ($cuotaAnterior) {
-            // Si está pagada el saldo es el registrado; si está pendiente usamos el saldo también
-            return (float) $cuotaAnterior->saldo_capital;
-        }
-
-        return (float) $plan->monto;
     }
 
     private function generarNuevasCuotas(
@@ -94,43 +75,15 @@ class ReprogramacionService
         Carbon $fechaInicio,
         int $numeracionDesde
     ): void {
-        $tasaMensual   = ($tasaAnual / 100) / 12;
-        $saldoSobrante = $capital;
-        $fecha         = $fechaInicio->copy();
-
-        if ($tasaMensual > 0) {
-            $cuotaFija = $capital * ($tasaMensual * pow(1 + $tasaMensual, $meses))
-                       / (pow(1 + $tasaMensual, $meses) - 1);
-        } else {
-            $cuotaFija = $capital / $meses;
-        }
-
+        $fecha = $fechaInicio->copy();
         $insert = [];
-        for ($i = 0; $i < $meses; $i++) {
-            $interesMes = $saldoSobrante * $tasaMensual;
-            $capitalMes = $cuotaFija - $interesMes;
-
-            if ($i === $meses - 1) {
-                $capitalMes = $saldoSobrante;
-                $cuotaFija  = $capitalMes + $interesMes;
-            }
-
-            $saldoSobrante -= $capitalMes;
-
-            $insert[] = [
-                'plan_pago_id'      => $plan->id,
-                'reprogramacion_id' => $reprogramacion->id,
-                'numero_cuota'      => $numeracionDesde + $i,
-                'fecha_vencimiento' => $fecha->format('Y-m-d'),
-                'monto_cuota'       => round($cuotaFija, 2),
-                'monto_interes'     => round($interesMes, 2),
-                'monto_capital'     => round($capitalMes, 2),
-                'saldo_capital'     => round(max(0, $saldoSobrante), 2),
-                'estado'            => 'Pendiente',
-                'created_at'        => now(),
-                'updated_at'        => now(),
-            ];
-
+        $used = $plan->cuotas()->whereNotIn('estado', ['Reprogramada', 'Anulada'])->pluck('numero_cuota')->flip();
+        $number = $numeracionDesde;
+        foreach (FrenchInstallmentSchedule::amounts($capital, $meses, $tasaAnual) as $amounts) {
+            while ($used->has($number)) { $number++; }
+            $insert[] = $amounts + ['plan_pago_id' => $plan->id, 'reprogramacion_id' => $reprogramacion->id,
+                'numero_cuota' => $number++, 'fecha_vencimiento' => $fecha->format('Y-m-d'), 'estado' => 'Pendiente',
+                'created_at' => now(), 'updated_at' => now()];
             $fecha->addMonth();
         }
 
@@ -143,7 +96,7 @@ class ReprogramacionService
     public function historial(PlanPago $plan): \Illuminate\Database\Eloquent\Collection
     {
         return $plan->reprogramaciones()
-            ->with(['usuario:id,name', 'cuotas'])
+            ->with(['usuario:id,nombre', 'cuotas'])
             ->orderBy('created_at', 'desc')
             ->get();
     }

@@ -9,6 +9,7 @@ use App\Models\Cuota;
 use App\Models\Ingreso;
 use App\Models\MiEmpresa;
 use App\Services\MoraService;
+use App\Services\InstallmentBalances;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -73,167 +74,102 @@ class PagoController extends Controller
     // 2. Registrar nuevo pago
     public function store(Request $request)
     {
-        $validatedData = $request->validate([
-            'nota_venta_id'  => 'required|exists:notas_ventas,id',
-            'cuota_id'       => 'nullable|exists:cuotas,id',
-            'concepto_pago'  => 'required|in:CUOTA_INICIAL,CUOTA,VENTA_CONTADO,OTRO',
-            'fecha_pago'     => 'required|date',
-            'monto'          => 'required|numeric|min:0.01',
-            'estado'         => 'nullable|in:PAGADO,CANCELADO,RECHAZADO,PENDIENTE_PAGO',
-            'observaciones'  => 'nullable|string|max:500'
+        $data = $request->validate([
+            'nota_venta_id' => 'required|integer|min:1', 'cuota_id' => 'nullable|integer|min:1',
+            'concepto_pago' => 'required|in:CUOTA_INICIAL,CUOTA,VENTA_CONTADO,OTRO',
+            'fecha_pago' => 'required|date', 'monto' => 'required|numeric|min:0.01',
+            'metodo_pago_id' => 'nullable|exists:metodos_pago,id', 'cuenta_id' => 'nullable|exists:cuentas_bancarias,id',
+            'estado' => 'nullable|in:PAGADO,CANCELADO,RECHAZADO,PENDIENTE_PAGO', 'observaciones' => 'nullable|string|max:500',
         ]);
-
-        try {
-            DB::beginTransaction();
-
-            // Validar que la nota de venta existe
-            $notaVenta = NotaVenta::findOrFail($validatedData['nota_venta_id']);
-
-            // Validaciones según el concepto de pago
-            switch ($validatedData['concepto_pago']) {
-                case 'CUOTA_INICIAL':
-                    if ($notaVenta->tipo_venta !== 'CREDITO') {
-                        return response()->json(['message' => 'No se puede registrar cuota inicial en una venta al contado'], 400);
-                    }
-                    if ($validatedData['monto'] > $notaVenta->cuota_inicial) {
-                        return response()->json(['message' => 'El monto no puede exceder la cuota inicial'], 400);
-                    }
-                    break;
-
-                case 'VENTA_CONTADO':
-                    if ($notaVenta->tipo_venta !== 'CONTADO') {
-                        return response()->json(['message' => 'No se puede registrar pago al contado en una venta al crédito'], 400);
-                    }
-                    if ($validatedData['monto'] > $notaVenta->monto_liquido) {
-                        return response()->json(['message' => 'El monto no puede exceder el monto líquido de la venta'], 400);
-                    }
-                    break;
-
-                case 'CUOTA':
-                    if (!$validatedData['cuota_id']) {
-                        return response()->json(['message' => 'Debe especificar una cuota para pago de cuota'], 400);
-                    }
-                    $cuota = Cuota::findOrFail($validatedData['cuota_id']);
-                    if ($validatedData['monto'] > $cuota->monto_cuota) {
-                        return response()->json(['message' => 'El monto no puede exceder la cuota'], 400);
-                    }
-                    if ($cuota->estado === 'Pagada') {
-                        return response()->json(['message' => 'Esta cuota ya ha sido pagada'], 400);
-                    }
-                    break;
-            }
-
-            // Crear el pago
-            $pago = Pago::create([
-                'nota_venta_id'  => $validatedData['nota_venta_id'],
-                'cuota_id'       => $validatedData['cuota_id'] ?? null,
-                'concepto_pago'  => $validatedData['concepto_pago'],
-                'fecha_pago'     => $validatedData['fecha_pago'],
-                'monto'          => $validatedData['monto'],
-                'estado'         => $validatedData['estado'] ?? 'PAGADO',
-                'observaciones'  => $validatedData['observaciones'] ?? null
-            ]);
-
-            // Si es pago de cuota, actualizar el estado de la cuota
-            if ($validatedData['concepto_pago'] === 'CUOTA' && $validatedData['cuota_id']) {
-                $cuota = Cuota::find($validatedData['cuota_id']);
-                // Verificar si la cuota está completamente pagada
-                $totalPagado = Pago::where('cuota_id', $cuota->id)
-                    ->where('estado', 'PAGADO')
-                    ->sum('monto');
-
-                if ($totalPagado >= $cuota->monto_cuota) {
-                    $cuota->update(['estado' => 'Pagada']);
-                }
-            }
-
-            // Si el pago se crea directamente como PAGADO, generar ingreso automático
-            if ($pago->estado === 'PAGADO') {
-                $pago->load('notaVenta.propiedad');
-                $this->crearIngresoDesde($pago);
-            }
-
-            DB::commit();
-            return response()->json([
-                'message' => 'Pago registrado con éxito',
-                'data' => $pago->load(['notaVenta.cliente', 'cuota'])
-            ], 201);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['message' => 'Error al registrar el pago: ' . $e->getMessage()], 500);
-        }
+        return DB::transaction(function () use ($data) {
+            $sale = $this->activeSale((int) $data['nota_venta_id']);
+            $state = $data['estado'] ?? 'PAGADO';
+            abort_if($state !== 'PAGADO' && $data['concepto_pago'] !== 'OTRO', 422, 'Para confirmar una obligación utiliza el flujo de cobro.');
+            if ($state === 'PAGADO') { $pago = $this->confirm($sale, $data); }
+            else { $pago = Pago::create($data); }
+            return response()->json(['message' => 'Pago registrado con éxito', 'data' => $pago->load(['notaVenta.cliente', 'cuota'])], 201);
+        });
     }
 
-    // Registrar cobro múltiple de cuotas
     public function storeBulk(Request $request)
     {
-        $validated = $request->validate([
-            'nota_venta_id'       => 'required|exists:notas_ventas,id',
-            'cuotas'              => 'required|array|min:1',
-            'cuotas.*.id'         => 'required|exists:cuotas,id',
-            'cuotas.*.monto'      => 'required|numeric|min:0.01',
-            'cuotas.*.mora_monto' => 'nullable|numeric|min:0',
-            'metodo_pago_id'      => 'required|exists:metodos_pago,id',
-            'cuenta_id'           => 'required|exists:cuentas_bancarias,id',
-            'fecha_pago'          => 'required|date',
-            'observaciones'       => 'nullable|string'
+        $data = $request->validate([
+            'nota_venta_id' => 'required|integer|min:1', 'cuotas' => 'required|array|min:1|max:100',
+            'cuotas.*.id' => 'required|integer|min:1|distinct', 'cuotas.*.monto' => 'required|numeric|min:0.01',
+            'cuotas.*.mora_monto' => 'nullable|numeric|min:0', 'metodo_pago_id' => 'required|exists:metodos_pago,id',
+            'cuenta_id' => 'required|exists:cuentas_bancarias,id', 'fecha_pago' => 'required|date', 'observaciones' => 'nullable|string|max:1000',
         ]);
-
-        try {
-            DB::beginTransaction();
-
-            foreach ($validated['cuotas'] as $item) {
-                $cuota = Cuota::findOrFail($item['id']);
-                
-                if ($cuota->estado === 'Pagada') {
-                    throw new \Exception("La cuota {$cuota->numero_cuota} ya ha sido pagada.");
-                }
-
-                $pago = Pago::create([
-                    'nota_venta_id'  => $validated['nota_venta_id'],
-                    'cuota_id'       => $cuota->id,
-                    'metodo_pago_id' => $validated['metodo_pago_id'],
-                    'cuenta_id'      => $validated['cuenta_id'],
-                    'concepto_pago'  => 'CUOTA',
-                    'fecha_pago'     => $validated['fecha_pago'],
-                    'monto'          => $item['monto'],
-                    'estado'         => 'PAGADO',
-                    'observaciones'  => $validated['observaciones']
-                ]);
-
-                // Actualizar estado de la cuota
-                $cuota->update(['estado' => 'Pagada']);
-
-                // Ingreso automático por cada cuota cobrada en bulk
-                $pago->load('notaVenta.propiedad');
-                $this->crearIngresoDesde($pago);
-
-                // Registrar mora si fue cobrada
-                $moraMonto = (float) ($item['mora_monto'] ?? 0);
-                if ($moraMonto > 0) {
-                    $cuota->load('planPago');
-                    $this->moraService->registrarMoraPago($cuota, $moraMonto, $validated, Auth::id());
+        return DB::transaction(function () use ($data) {
+            $sale = $this->activeSale((int) $data['nota_venta_id']); $payments = [];
+            foreach ($data['cuotas'] as $item) {
+                $pago = $this->confirm($sale, $data + ['cuota_id' => $item['id'], 'concepto_pago' => 'CUOTA', 'monto' => $item['monto']]);
+                $payments[] = $pago;
+                $mora = (float) ($item['mora_monto'] ?? 0);
+                if ($mora > 0) {
+                    $quota = $pago->cuota;
+                    $paid = (float) $quota->pagos()->where('estado', 'PAGADO')->where('concepto_pago', 'MORA')->sum('monto');
+                    $exigible = $this->moraService->calcularMora($quota, $data['fecha_pago'])['monto_mora'];
+                    abort_if(InstallmentBalances::cents($mora) > InstallmentBalances::cents($exigible - $paid), 422, 'La mora supera el saldo exigible.');
+                    $this->moraService->registrarMoraPago($quota, $mora, $data, Auth::id());
                 }
             }
+            return response()->json(['message' => 'Cobros registrados con éxito', 'data' => $payments], 201);
+        });
+    }
 
-            // Actualizar saldo_credito en nota_venta con el capital pendiente real
-            $notaVenta = \App\Models\NotaVenta::findOrFail($validated['nota_venta_id']);
-            $planPago   = $notaVenta->planPago;
-            if ($planPago) {
-                $nuevoSaldo = $planPago->cuotas()
-                    ->whereIn('estado', ['Pendiente', 'Vencida'])
-                    ->sum('monto_capital');
-                $notaVenta->update(['saldo_credito' => round((float) $nuevoSaldo, 2)]);
-            }
+    private function activeSale(int $id): NotaVenta
+    {
+        $sale = NotaVenta::with('propiedad')->lockForUpdate()->findOrFail($id);
+        abort_unless(in_array($sale->estado, ['Completada', 'Activa'], true), 409, 'La venta no está operativa.');
+        return $sale;
+    }
 
-            DB::commit();
-            return response()->json(['message' => 'Cobros registrados con éxito'], 201);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['message' => $e->getMessage()], 500);
+    private function confirm(NotaVenta $sale, array $data, ?Pago $existing = null): Pago
+    {
+        $concept = $data['concepto_pago']; $amount = InstallmentBalances::cents($data['monto']);
+        abort_unless($amount > 0 && abs((float) $data['monto'] - $amount / 100) < 0.0000001, 422, 'El importe admite hasta dos decimales.');
+        $quota = null; $pending = null; $remaining = null;
+        if (isset($data['cuota_id'])) {
+            $quota = Cuota::with('planPago')->lockForUpdate()->findOrFail($data['cuota_id']);
+            abort_unless($concept === 'CUOTA' && (int) $quota->planPago->nota_venta_id === (int) $sale->id
+                && in_array($quota->estado, ['Pendiente', 'Vencida'], true), 409, 'Cuota ajena, pagada o reemplazada.');
+            $balance = InstallmentBalances::forPlan($quota->planPago, collect([$quota]))[$quota->id];
+            $remaining = InstallmentBalances::cents($balance['monto_pendiente']);
+        } elseif ($concept === 'CUOTA') { abort(422, 'Selecciona la cuota que se va a cobrar.'); }
+        elseif (in_array($concept, ['CUOTA_INICIAL', 'VENTA_CONTADO'], true)) {
+            abort_unless(($concept === 'CUOTA_INICIAL') === ($sale->tipo_venta === 'CREDITO'), 422, 'Concepto incompatible con la venta.');
+            $remaining = $this->remainingUpfront($sale, $concept);
+            $pending = Pago::where('nota_venta_id', $sale->id)->whereNull('cuota_id')->where('concepto_pago', $concept)
+                ->where('estado', 'PENDIENTE_PAGO')->orderBy('id')->lockForUpdate()->first();
         }
+        abort_if($remaining !== null && $amount > $remaining, 422, 'El importe supera el saldo exigible.');
+        if (! empty($data['metodo_pago_id'])) {
+            abort_unless(\App\Models\MetodoPago::whereKey($data['metodo_pago_id'])->where('estado', 'Activo')->exists(), 422, 'Método de pago inactivo.');
+        }
+        if (! empty($data['cuenta_id'])) {
+            abort_unless(\App\Models\CuentaBancaria::whereKey($data['cuenta_id'])->where('estado', 'Activa')->exists(), 422, 'Cuenta inactiva.');
+        }
+        if ($pending && $existing && $pending->id !== $existing->id) { abort(409, 'Confirma la obligación pendiente original.'); }
+        $payment = $existing ?? ($pending && $amount === $remaining ? $pending : new Pago());
+        $payment->fill(['nota_venta_id' => $sale->id, 'cuota_id' => $quota?->id, 'concepto_pago' => $concept,
+            'fecha_pago' => $data['fecha_pago'], 'monto' => $amount / 100, 'estado' => 'PAGADO',
+            'metodo_pago_id' => $data['metodo_pago_id'] ?? $payment->metodo_pago_id, 'cuenta_id' => $data['cuenta_id'] ?? $payment->cuenta_id,
+            'observaciones' => $data['observaciones'] ?? $payment->observaciones])->save();
+        if ($pending && $pending->id !== $payment->id) { $pending->update(['monto' => ($remaining - $amount) / 100]); }
+        if ($quota) {
+            if ($amount === $remaining) { $quota->update(['estado' => 'Pagada']); }
+            $sale->update(['saldo_credito' => InstallmentBalances::outstandingCapital($quota->planPago)]);
+        }
+        $payment->setRelation('notaVenta', $sale);
+        $this->crearIngresoDesde($payment);
+        return $payment;
+    }
+
+    private function remainingUpfront(NotaVenta $sale, string $concept): int
+    {
+        $total = $concept === 'CUOTA_INICIAL' ? $sale->cuota_inicial : $sale->monto_liquido;
+        $paid = Pago::where('nota_venta_id', $sale->id)->where('concepto_pago', $concept)->where('estado', 'PAGADO')->sum('monto');
+        return max(0, InstallmentBalances::cents($total) - InstallmentBalances::cents($paid));
     }
 
     // 3. Ver detalle de un pago
@@ -347,33 +283,26 @@ class PagoController extends Controller
     // 8. Cancelar pago
     public function cancelar($id)
     {
-        try {
-            DB::beginTransaction();
-
-            $pago = Pago::findOrFail($id);
-
-            if ($pago->estado === 'CANCELADO') {
-                return response()->json(['message' => 'El pago ya fue cancelado'], 400);
+        return DB::transaction(function () use ($id) {
+            $pago = Pago::with('cuota.planPago')->lockForUpdate()->findOrFail($id);
+            $sale = $this->activeSale($pago->nota_venta_id);
+            abort_unless($pago->estado === 'PAGADO' && $pago->concepto_pago !== 'AMORTIZACION', 409, 'Solo se revierten cobros confirmados ordinarios.');
+            $quota = $pago->cuota; $plan = $quota?->planPago;
+            if ($plan) {
+                abort_if($quota->estado === 'Reprogramada' || $plan->reprogramaciones()->where('id', '>', $quota->reprogramacion_id ?? 0)->where('created_at', '>=', $pago->created_at)->exists()
+                    || Pago::where('nota_venta_id', $sale->id)->where('concepto_pago', 'AMORTIZACION')->where('estado', 'PAGADO')->where('id', '>', $pago->id)->exists(), 409, 'El cobro pertenece a un plan con cambios posteriores.');
             }
-
             $pago->update(['estado' => 'CANCELADO']);
-
-            // Si es pago de cuota, volver a pendiente
-            if ($pago->concepto_pago === 'CUOTA' && $pago->cuota_id) {
-                $cuota = Cuota::find($pago->cuota_id);
-                $cuota->update(['estado' => 'Pendiente']);
+            Ingreso::where('pago_id', $pago->id)->update(['estado' => 'ANULADO']);
+            if ($quota && $pago->concepto_pago === 'CUOTA') {
+                $quota->update(['estado' => 'Pendiente']);
+                $sale->update(['saldo_credito' => InstallmentBalances::outstandingCapital($plan)]);
+            } elseif (in_array($pago->concepto_pago, ['VENTA_CONTADO', 'CUOTA_INICIAL'], true)) {
+                $pending = Pago::where('nota_venta_id', $sale->id)->where('concepto_pago', $pago->concepto_pago)->where('estado', 'PENDIENTE_PAGO')->orderBy('id')->first() ?? new Pago();
+                $pending->fill(['nota_venta_id' => $sale->id, 'concepto_pago' => $pago->concepto_pago, 'monto' => $this->remainingUpfront($sale, $pago->concepto_pago) / 100, 'estado' => 'PENDIENTE_PAGO'])->save();
             }
-
-            DB::commit();
-            return response()->json([
-                'message' => 'Pago cancelado con éxito',
-                'data' => $pago->load(['notaVenta.cliente', 'cuota'])
-            ], 200);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['message' => 'Error al cancelar el pago: ' . $e->getMessage()], 500);
-        }
+            return response()->json(['message' => 'Pago e ingreso revertidos.', 'data' => $pago]);
+        });
     }
 
     // 9. Reportes de pagos por período
@@ -412,66 +341,16 @@ class PagoController extends Controller
     // Procesar pago pendiente
     public function procesarPagoPendiente(Request $request, $id)
     {
-        $pago = Pago::findOrFail($id);
-
-        if ($pago->estado !== 'PENDIENTE_PAGO') {
-            return response()->json(['message' => 'Este pago ya ha sido procesado'], 400);
-        }
-
-        $validated = $request->validate([
-            'metodo_pago_id' => 'required|exists:metodos_pago,id',
-            'cuenta_id' => 'required|exists:cuentas_bancarias,id',
-            'fecha_pago' => 'required|date',
-            'observaciones' => 'nullable|string|max:500'
-        ]);
-
-        try {
-            DB::beginTransaction();
-
-            // Actualizar el pago con los datos
-            $pago->update([
-                'metodo_pago_id' => $validated['metodo_pago_id'],
-                'cuenta_id' => $validated['cuenta_id'],
-                'fecha_pago' => $validated['fecha_pago'],
-                'observaciones' => $validated['observaciones'] ?? $pago->observaciones,
-                'estado' => 'PAGADO'
-            ]);
-
-            // Si es pago de cuota, actualizar el estado de la cuota
-            if ($pago->concepto_pago === 'CUOTA' && $pago->cuota_id) {
-                $cuota = Cuota::find($pago->cuota_id);
-                $totalPagado = Pago::where('cuota_id', $cuota->id)
-                    ->where('estado', 'PAGADO')
-                    ->sum('monto');
-
-                if ($totalPagado >= $cuota->monto_cuota) {
-                    $cuota->update(['estado' => 'Pagada']);
-                }
-            }
-
-            // Ingreso automático al confirmar el pago pendiente
-            $pago->load('notaVenta.propiedad');
-            $this->crearIngresoDesde($pago);
-
-            // Actualizar saldo_credito si es pago de cuota
-            if ($pago->concepto_pago === 'CUOTA' && $pago->cuota_id) {
-                $notaVenta = \App\Models\NotaVenta::find($pago->nota_venta_id);
-                $planPago   = $notaVenta?->planPago;
-                if ($planPago) {
-                    $nuevoSaldo = $planPago->cuotas()
-                        ->whereIn('estado', ['Pendiente', 'Vencida'])
-                        ->sum('monto_capital');
-                    $notaVenta->update(['saldo_credito' => round((float) $nuevoSaldo, 2)]);
-                }
-            }
-
-            DB::commit();
-            return response()->json(['message' => 'Pago procesado exitosamente', 'data' => $pago->load('metodoPago', 'cuenta')], 200);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['message' => 'Error al procesar el pago: ' . $e->getMessage()], 500);
-        }
+        $data = $request->validate(['metodo_pago_id' => 'required|exists:metodos_pago,id', 'cuenta_id' => 'required|exists:cuentas_bancarias,id',
+            'fecha_pago' => 'required|date', 'observaciones' => 'nullable|string|max:500']);
+        return DB::transaction(function () use ($id, $data) {
+            $pago = Pago::lockForUpdate()->findOrFail($id);
+            abort_unless($pago->estado === 'PENDIENTE_PAGO', 400, 'El cobro ya no está pendiente.');
+            abort_if($pago->id_transaccion_libelula, 409, 'El cobro externo requiere conciliación.');
+            $sale = $this->activeSale($pago->nota_venta_id);
+            $result = $this->confirm($sale, $data + $pago->only(['monto', 'cuota_id', 'concepto_pago']), $pago);
+            return response()->json(['message' => 'Pago procesado exitosamente', 'data' => $result->load('metodoPago', 'cuenta')]);
+        });
     }
 
     // Helper: crea un Ingreso automático a partir de un Pago confirmado
@@ -498,6 +377,7 @@ class PagoController extends Controller
             'pago_id'            => $pago->id,
             'nota_venta_id'      => $pago->nota_venta_id,
             'cuenta_bancaria_id' => $pago->cuenta_id,
+            'user_id' => Auth::id(),
             'estado'             => 'CONFIRMADO',
         ]);
     }
@@ -543,6 +423,11 @@ class PagoController extends Controller
             'cuenta',
         ])->findOrFail($id);
 
+        return $this->renderReceipt($pago);
+    }
+
+    public function renderReceipt(Pago $pago)
+    {
         if ($pago->estado !== 'PAGADO') {
             return response()->json(['message' => 'Solo se puede generar comprobante de pagos confirmados.'], 422);
         }
@@ -606,6 +491,7 @@ class PagoController extends Controller
         $cuenta       = ($pago->cuenta    && $pago->cuenta->nombre)             ? $pago->cuenta->nombre             : '-';
         $observ       = $pago->observaciones ? $pago->observaciones : '-';
         $monto        = $this->fmt($pago->monto);
+        $monedaLabel  = in_array($propiedad?->moneda, ['USD', '$'], true) ? 'USD' : 'Bs.';
         $generado     = $this->hoy();
 
         return <<<HTML
@@ -710,7 +596,7 @@ class PagoController extends Controller
 
 <div class="monto-box">
   <div class="monto-label">Monto Pagado</div>
-  <div class="monto-val">Bs. $monto</div>
+  <div class="monto-val">$monedaLabel $monto</div>
 </div>
 
 <div class="footer">
