@@ -1,13 +1,26 @@
 <?php
 
+use Tests\Support\IsolatedDatabaseGuard;
+
+require_once __DIR__.'/IsolatedDatabaseGuard.php';
+
 // Mirrors the production storage symlink using only the isolated fixture root.
 // Never expose the developer's real public/storage through the test HTTP servers.
-if (getenv('MULTILIDER_TEST_ISOLATED') !== '1' || getenv('DB_DATABASE') !== 'multilider_tests_isolated' || getenv('DB_PORT') === '3306') {
+if (getenv('MULTILIDER_TEST_ISOLATED') !== '1' || ! IsolatedDatabaseGuard::allowedName((string) getenv('DB_DATABASE')) || getenv('DB_PORT') === '3306') {
     http_response_code(503);
 
     return;
 }
-$_ENV['LARAVEL_STORAGE_PATH'] = $_SERVER['LARAVEL_STORAGE_PATH'] = realpath(__DIR__.'/../../storage/framework/testing/app');
+$storage = realpath(__DIR__.'/../../storage/framework/testing/app');
+if (getenv('DB_DATABASE') === getenv('MULTILIDER_F5_RESTORED_MYSQL')) {
+    $storage = realpath(getenv('MULTILIDER_F5_RESTORED_STORAGE'));
+    $fixtureRoot = realpath(__DIR__.'/../../storage/framework/testing');
+    if (! $storage || dirname(dirname($storage)) !== $fixtureRoot || ! preg_match('/^f5-restore-[a-f0-9]{32}$/D', basename(dirname($storage)))) {
+        http_response_code(503);
+        return;
+    }
+}
+$_ENV['LARAVEL_STORAGE_PATH'] = $_SERVER['LARAVEL_STORAGE_PATH'] = $storage;
 $uri = rawurldecode(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
 if (str_starts_with($uri, '/storage/')) {
     if (! preg_match('~^/storage/propiedades/[1-9][0-9]*/f4-[a-f0-9-]{36}\.(jpg|jpeg|png|gif)$~D', $uri)) {
@@ -15,8 +28,8 @@ if (str_starts_with($uri, '/storage/')) {
 
         return;
     }
-    $root = realpath(__DIR__.'/../../storage/framework/testing/app/app/public');
-    $path = realpath(__DIR__.'/../../storage/framework/testing/app/app/public/'.substr($uri, 9));
+    $root = realpath($storage.'/app/public');
+    $path = realpath($storage.'/app/public/'.substr($uri, 9));
     if (! $root || ! $path || ! str_starts_with($path, $root.DIRECTORY_SEPARATOR) || ! is_file($path)) {
         http_response_code(404);
 

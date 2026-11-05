@@ -6,10 +6,12 @@ param(
     [switch]$Phase5,
     [switch]$RecoveryTests,
     [switch]$RestoreTests,
+    [switch]$AcceptanceTests,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$TestArguments
 )
 $ErrorActionPreference = 'Stop'
 if ($IntegrationOnly -and !$Integration) { throw '-IntegrationOnly requiere -Integration.' }
+if ($AcceptanceTests -and (!$Integration -or !$Phase5)) { throw '-AcceptanceTests requiere -Integration -Phase5.' }
 $project = Split-Path $PSScriptRoot -Parent
 $runtime = Join-Path $project 'storage\framework\testing'
 $data = Join-Path $runtime 'mysql'
@@ -52,6 +54,8 @@ try {
         MULTILIDER_TEST_PORT="$port"; MULTILIDER_TEST_ISOLATED='1'
         APP_CONFIG_CACHE='storage/framework/testing/config.php'; APP_ROUTES_CACHE='storage/framework/testing/routes.php'; APP_SERVICES_CACHE='storage/framework/testing/services.php'; APP_PACKAGES_CACHE='storage/framework/testing/packages.php'; APP_EVENTS_CACHE='storage/framework/testing/events.php'; DATABASE_URL=''
         CACHE_DRIVER='array'; SESSION_DRIVER='array'; MAIL_MAILER='array'; QUEUE_CONNECTION='sync'; LOG_CHANNEL='null'
+        LIBELULA_ENABLED='0'; LIBELULA_RECONCILIATION_ENABLED='false'; LIBELULA_API_URL='https://payments.example.test'; LIBELULA_API_KEY='fixture-only'
+        LIBELULA_REMOTE_TEST_PAYMENTS_ENABLED='false'; PaymentTests__Enabled='false'; Libelula__BaseUrl='https://payments.example.test'; Libelula__ApiKey='fixture-only'
         MULTILIDER_IDENTITY_USER='identity_test'; MULTILIDER_IDENTITY_PASSWORD=$identityPassword; MULTILIDER_IDENTITY_DATABASE='multilider_identity_tests_isolated'
     }
     # Private, ignored file for reproducing the run; never commit or print it.
@@ -65,7 +69,7 @@ try {
             $result = $LASTEXITCODE
         }
         if ($result -eq 0 -and $Integration) {
-            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -MySqlBin $MySqlBin }
+            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -AcceptanceTests:$AcceptanceTests -MySqlBin $MySqlBin }
             else { & (Join-Path $PSScriptRoot 'integration-f3.ps1') -BrowserTests:$BrowserTests }
             $result = $LASTEXITCODE
         }

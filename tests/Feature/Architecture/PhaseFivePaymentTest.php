@@ -70,4 +70,49 @@ final class PhaseFivePaymentTest extends TestCase
         $this->assertFalse($gateway->verify($reference, 'BOB', '0.20', '2026-11-05 10:00:00'));
         $this->assertTrue($gateway->verify($reference, 'BOB', '0.20', '2026-11-05 10:00:00'));
     }
+
+    public function test_callback_write_failure_requires_retry_and_provider_timeout_keeps_the_order_pending(): void
+    {
+        config(['services.libelula.api_key' => 'fixture-not-a-real-key', 'services.libelula.base_url' => 'https://payments.example.test']);
+        Http::preventStrayRequests();
+        $operation = (string) Str::uuid();
+        $reference = 'TEMP-'.$operation;
+        DB::table('payment_test_orders')->insert(['id' => $operation, 'reference' => $reference,
+            'request_hash' => str_repeat('b', 64), 'cliente_id' => 1, 'state' => 'Registrada',
+            'amount' => 0.20, 'currency' => 'BOB', 'selection' => '[]', 'created_at' => now(), 'updated_at' => now()]);
+        $verify = 0;
+        Http::fake(['payments.example.test/rest/deuda/consultar_deudas/por_fechas' => function () use (&$verify, $reference) {
+            if (++$verify === 1) {
+                throw new \Illuminate\Http\Client\ConnectionException('Fixture read timeout');
+            }
+            return Http::response(['error' => 0, 'datos' => [
+                ['identificador' => $reference, 'pagado' => true, 'valor_total' => '0.20', 'moneda' => 'BOB'],
+            ]]);
+        }]);
+        $failWrite = true;
+        DB::connection()->beforeExecuting(function (string $sql) use (&$failWrite): void {
+            if ($failWrite && str_starts_with(strtolower($sql), 'insert ignore into `payment_test_inbox`')) {
+                throw new \RuntimeException('Fixture inbox write unavailable.');
+            }
+        });
+        $callback = ['identificador' => $reference, 'transaction_id' => 'test-retry', 'error' => '0'];
+        try {
+            $this->postJson('/api/public/pagos/callback', $callback)->assertServerError();
+            $this->assertDatabaseCount('payment_test_inbox', 0);
+            $this->assertSame(0, $verify);
+        } finally {
+            $failWrite = false;
+        }
+        $this->postJson('/api/public/pagos/callback', $callback)->assertOk()->assertJsonPath('ok', true);
+        $this->assertDatabaseHas('payment_test_inbox', ['reference' => $reference, 'state' => 'Pendiente']);
+        $this->assertDatabaseHas('payment_test_orders', ['id' => $operation, 'state' => 'Registrada']);
+        $this->postJson('/api/public/pagos/callback', $callback)->assertOk();
+        $this->postJson('/api/public/pagos/callback', array_replace($callback, ['cancel_order' => '1']))->assertOk();
+        $this->assertDatabaseCount('payment_test_inbox', 2);
+        $this->assertDatabaseHas('payment_test_inbox', ['reference' => $reference, 'state' => 'Conciliada']);
+        $this->assertDatabaseHas('payment_test_orders', ['id' => $operation, 'state' => 'PagadaPrueba']);
+        $this->assertSame(2, $verify);
+        $this->assertDatabaseCount('ingresos', 0);
+        $this->assertDatabaseCount('pagos', 0);
+    }
 }

@@ -1,10 +1,11 @@
-param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[string]$MySqlBin)
+param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[string]$MySqlBin)
 $ErrorActionPreference='Stop'
 if($env:MULTILIDER_TEST_ISOLATED -ne '1' -or $env:DB_DATABASE -ne 'multilider_tests_isolated' -or $env:DB_PORT -eq '3306'){throw 'Run test-isolated.ps1 -Integration -Phase5.'}
 $backend=Split-Path $PSScriptRoot -Parent
 $workspace=Split-Path $backend -Parent
 $runtime=Join-Path $backend 'storage\framework\testing'
 $previous=@{};$processes=[Collections.Generic.List[Diagnostics.Process]]::new();$started=@{};$launches=@{}
+$restoreSql=@{};$restoreMySql=@{};$mysqlRestoreArgs=$null
 function Set-F5([string]$name,[string]$value) {
     if(!$previous.ContainsKey($name)){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
     [Environment]::SetEnvironmentVariable($name,$value,'Process')
@@ -13,7 +14,13 @@ function Port-F5 {
     $socket=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);$socket.Start();$port=$socket.LocalEndpoint.Port;$socket.Stop();return $port
 }
 function Start-F5([string]$name,[string]$executable,[string[]]$arguments,[string]$directory) {
-    $p=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtime "$name.out.log") -RedirectStandardError (Join-Path $runtime "$name.err.log")
+    $priorHook=$env:DOTNET_STARTUP_HOOKS
+    try {
+        if($AcceptanceTests -and $name -like 'f5-comercial*'){
+            $env:DOTNET_STARTUP_HOOKS=Join-Path $workspace 'multilider-ms-comercial\tests\FixtureSetup\bin\Debug\net10.0\FixtureSetup.dll'
+        }
+        $p=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtime "$name.out.log") -RedirectStandardError (Join-Path $runtime "$name.err.log")
+    } finally { $env:DOTNET_STARTUP_HOOKS=$priorHook }
     $processes.Add($p);return $p
 }
 function Wait-F5([string]$url,[int]$status) {
@@ -45,6 +52,11 @@ $connections=@{
 }
 try {
     if(!(Test-Path $securityRuntime)){throw 'Private ASP.NET8 runtime from F3 required.'}
+    if($AcceptanceTests){
+        $boundaryDir=Join-Path $runtime ('f5-boundary-'+[Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $boundaryDir|Out-Null
+        Set-F5 'MULTILIDER_F5_BOUNDARY_DIR' $boundaryDir
+    }
     & (Join-Path $PSScriptRoot 'tls-fixture-f4.ps1') -Directory $runtime
     $server=Get-Content (Join-Path $runtime 'tls-f4.json') -Raw | ConvertFrom-Json
     foreach($role in $roles){
@@ -116,6 +128,29 @@ try {
     $authBody=@{operation_id=$unknown;action='read'}|ConvertTo-Json -Compress
     $response=Invoke-WebRequest $authorizeUrl -Method Post -SkipCertificateCheck -SkipHttpErrorCheck -ContentType 'application/json' -Body $authBody -TimeoutSec 5
     if([int]$response.StatusCode -ne 403){throw 'Technical route accepted a request without mTLS identity.'}
+    if($AcceptanceTests){
+        $unlisted=[Security.Cryptography.X509Certificates.X509Certificate2]::new($server.client_path,$server.password)
+        try {
+            $denied=$false
+            try {
+                $result=Invoke-WebRequest $authorizeUrl -Method Post -SkipCertificateCheck -SkipHttpErrorCheck -Certificate $unlisted -ContentType 'application/json' -Body $authBody -TimeoutSec 5
+                $denied=[int]$result.StatusCode -eq 403
+            } catch {
+                # Schannel can surface rejection after TLS 1.3 client auth as
+                # an encrypted-alert/decryption failure on the first read.
+                for($cause=$_.Exception;$null -ne $cause;$cause=$cause.InnerException){
+                    if($cause -is [System.Security.Authentication.AuthenticationException] -or
+                        $cause.Message -match '(?i)decryption operation failed|TLS alert|SSL connection could not be established'){
+                        $denied=$true
+                        break
+                    }
+                }
+                if(!$denied){throw}
+            }
+            if(!$denied){throw 'Unlisted certificate reached the operation authority.'}
+            Write-Output 'F5-A01: missing or unlisted client certificate denied by the real TLS listener.'
+        } finally { $unlisted.Dispose() }
+    }
     $knownCert=[Security.Cryptography.X509Certificates.X509Certificate2]::new($certs.finanzas,$password)
     try {
         $wrongScope=@{operation_id=$unknown;action='pivot'}|ConvertTo-Json -Compress
@@ -123,14 +158,28 @@ try {
         if([int]$response.StatusCode -ne 403){throw 'Finance certificate received a Comercial scope.'}
         $response=Invoke-WebRequest $authorizeUrl -Method Post -SkipCertificateCheck -SkipHttpErrorCheck -Certificate $knownCert -ContentType 'application/json' -Body $authBody -TimeoutSec 5
         if([int]$response.StatusCode -ne 404){throw 'Technical certificate bypassed the durable grant.'}
+        if($AcceptanceTests){
+            $user=Invoke-WebRequest "https://127.0.0.1:$($tls.seguridad)/api/usuario" -SkipCertificateCheck -SkipHttpErrorCheck -Certificate $knownCert -TimeoutSec 5
+            $pay=Invoke-WebRequest "https://127.0.0.1:$($tls.finanzas)/api/pagos" -Method Post -SkipCertificateCheck -SkipHttpErrorCheck -Certificate $knownCert -ContentType 'application/json' -Body '{}' -TimeoutSec 5
+            if([int]$user.StatusCode -ne 401 -or [int]$pay.StatusCode -ne 401){throw 'Technical certificate authorized a user route.'}
+            Write-Output 'F5-A11: real technical certificate cannot administer users or record payments.'
+        }
     } finally {$knownCert.Dispose()}
     Write-Output 'F5 mTLS negative checks: missing certificate, wrong scope and missing grant rejected.'
-    if($BrowserTests -or $RecoveryTests) {
+    if($BrowserTests -or $RecoveryTests -or $AcceptanceTests) {
         Set-F5 'APP_ARCHITECTURE' 'local';Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-local-config.php'
         & php (Join-Path $backend 'tests/Support/CacheFixture.php')
         if($LASTEXITCODE -ne 0){throw 'Local config cache failed.'}
         $null=Start-F5 'f5-laravel-local' (Get-Command php).Source @('-S',"127.0.0.1:$localPort",'-t','.',(Join-Path $backend 'tests/Support/FixtureHttpRouter.php')) (Join-Path $backend 'public')
+        $launches['laravel-local']=@{file=(Get-Command php).Source;args=@('-S',"127.0.0.1:$localPort",'-t','.',(Join-Path $backend 'tests/Support/FixtureHttpRouter.php'));folder=(Join-Path $backend 'public');probe="http://127.0.0.1:$localPort/api/me"}
         Wait-F5 "http://127.0.0.1:$localPort/api/me" 401
+        if($AcceptanceTests){
+            $secondLocalPort=Port-F5
+            $null=Start-F5 'f5-laravel-local-second' (Get-Command php).Source @('-S',"127.0.0.1:$secondLocalPort",'-t','.',(Join-Path $backend 'tests/Support/FixtureHttpRouter.php')) (Join-Path $backend 'public')
+            Wait-F5 "http://127.0.0.1:$secondLocalPort/api/me" 401
+            Set-F5 'PHASE5_API_LOCAL_SECOND' "http://127.0.0.1:$secondLocalPort"
+        }
+        Set-F5 'PHASE5_API_LOCAL' "http://127.0.0.1:$localPort"
     }
     Set-F5 'APP_ARCHITECTURE' 'microservices';Set-F5 'BUSINESS_MICROSERVICES_ENABLED' 'true'
     Set-F5 'IDENTITY_SIGNING_KEY' $key;Set-F5 'IDENTITY_ISSUER' 'phase3-isolated';Set-F5 'IDENTITY_AUDIENCE' 'phase3-isolated'
@@ -145,6 +194,11 @@ try {
     Set-F5 'PHASE5_API' "http://127.0.0.1:$backendPort";Set-F5 'PHASE5_FINANCE' "http://127.0.0.1:$($http.finanzas)";Set-F5 'PHASE5_COMMERCIAL' "http://127.0.0.1:$($http.comercial)"
     & php (Join-Path $backend 'tests\Support\PhaseFiveIntegrationSmoke.php')
     if($LASTEXITCODE -ne 0){throw 'F5 integration failed; inspect private service logs.'}
+    if($AcceptanceTests) {
+        Set-F5 'PHASE5_SECURITY' "http://127.0.0.1:$($http.seguridad)"
+        & php (Join-Path $backend 'tests/Support/PhaseFiveAcceptance.php')
+        if($LASTEXITCODE -ne 0){throw 'F5 acceptance checks failed.'}
+    }
     if($RecoveryTests) {
         Set-F5 'PHASE5_API_LOCAL' "http://127.0.0.1:$localPort"
         $exercise=Join-Path $backend 'tests\Support\PhaseFiveRecoverySmoke.php'
@@ -192,12 +246,25 @@ try {
         try {& node (Join-Path $frontend 'node_modules\@playwright\test\cli.js') test --config (Join-Path $frontend 'playwright.phase5.config.js');if($LASTEXITCODE -ne 0){throw 'F5 browser tests failed.'}}finally{Pop-Location}
     }
     if($RestoreTests) {
+        $replay=$AcceptanceTests
+        if($replay){
+            & php (Join-Path $backend 'tests/Support/PhaseFiveReplay.php') checkpoint
+            if($LASTEXITCODE -ne 0){throw 'Could not prepare replay checkpoint.'}
+        }
         # Close every fixture listener and worker to obtain one checkpoint across authorities.
         foreach($p in $processes){if(!$p.HasExited){& taskkill.exe /PID $p.Id /T /F 2>$null|Out-Null;if(!$p.WaitForExit(5000)){throw 'Could not freeze fixture writers.'}}}
         $processes.Clear()
         $backupRoot=Join-Path $runtime ('f5-restore-'+[Guid]::NewGuid().ToString('N'))
         Set-F5 'MULTILIDER_F5_BACKUP_ROOT' $backupRoot
         $restoreTool=Join-Path $workspace 'multilider-ms-comercial\tests\FixtureSetup\bin\Debug\net10.0\FixtureSetup.dll'
+        if($replay){
+            foreach($role in @('propiedades','comercial','finanzas')){
+                $prefix=@{propiedades='multilider_properties_f3_test_';comercial='multilider_comercial_f4_test_';finanzas='multilider_finanzas_f5_test_'}[$role]
+                $name=$prefix+[Guid]::NewGuid().ToString('N')
+                Set-F5 "MULTILIDER_F5_RESTORE_$($role.ToUpperInvariant())" $name
+                $restoreSql[$role]=$connections[$role] -replace '(?<=Database=)[^;]+',$name
+            }
+        }
         & $dotnet $restoreTool verify-restoration
         if($LASTEXITCODE -ne 0){throw 'SQL Server restore verification failed.'}
         $mysql=Join-Path $MySqlBin 'mysql.exe';$dump=Join-Path $MySqlBin 'mysqldump.exe'
@@ -205,6 +272,7 @@ try {
         $common=@('--no-defaults','--host=127.0.0.1',"--port=$env:DB_PORT",'--user=root','--skip-password')
         $actual=& $mysql @common --batch --skip-column-names '--execute=SELECT @@port'
         if($LASTEXITCODE -ne 0 -or "$actual" -ne $env:DB_PORT){throw 'Unexpected MySQL test port.'}
+        $mysqlRestoreArgs=$common
         foreach($database in @('multilider_tests_isolated','multilider_identity_tests_isolated')) {
             $restored='multilider_f5_restore_'+[Guid]::NewGuid().ToString('N')
             $sourcePath=Join-Path $backupRoot "$database.sql";$copyPath=Join-Path $backupRoot "$restored.sql"
@@ -215,6 +283,7 @@ try {
             if($LASTEXITCODE -ne 0 -or "$schema" -notmatch '^([a-z0-9]+) ([a-z0-9_]+)$'){throw 'Invalid source schema defaults.'}
             & $mysql @common "--execute=CREATE DATABASE $restored CHARACTER SET $($Matches[1]) COLLATE $($Matches[2])"
             if($LASTEXITCODE -ne 0){throw 'MySQL restore destination failed.'}
+            $restoreMySql[$database]=$restored
             try {
                 & $mysql @common "--database=$restored" "--execute=SOURCE $($sourcePath.Replace('\','/'))"
                 if($LASTEXITCODE -ne 0){throw 'MySQL restore failed.'}
@@ -223,8 +292,11 @@ try {
                 Write-Output "F5 MySQL backup/restore verified: $database (full logical fingerprint)."
             } finally {
                 if($restored -notmatch '^multilider_f5_restore_[a-f0-9]{32}$'){throw 'Unsafe MySQL restore cleanup.'}
-                & $mysql @common "--execute=DROP DATABASE $restored"
-                if($LASTEXITCODE -ne 0){throw 'Could not clean isolated MySQL restore.'}
+                if(!$replay){
+                    & $mysql @common "--execute=DROP DATABASE $restored"
+                    if($LASTEXITCODE -ne 0){throw 'Could not clean isolated MySQL restore.'}
+                    $restoreMySql.Remove($database)
+                }
             }
         }
         foreach($name in @('f5-private-documents','f5-private-photos')) {
@@ -237,19 +309,73 @@ try {
                 }
             }
         }
+        if($replay){
+            $appSource=Join-Path $runtime 'app\app'
+            $appDestination=Join-Path $backupRoot 'laravel-storage\app'
+            New-Item -ItemType Directory -Force -Path $appDestination|Out-Null
+            if(Test-Path -LiteralPath $appSource){
+                Get-ChildItem -LiteralPath $appSource -File -Recurse|ForEach-Object {
+                    $relative=$_.FullName.Substring($appSource.Length+1)
+                    $target=Join-Path $appDestination $relative
+                    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target)|Out-Null
+                    Copy-Item -LiteralPath $_.FullName -Destination $target
+                    if((Get-FileHash -LiteralPath $_.FullName).Hash -ne (Get-FileHash -LiteralPath $target).Hash){throw 'Restored Laravel storage fingerprint differs.'}
+                }
+            }
+        }
         $files=@(Get-ChildItem -LiteralPath $backupRoot -File -Recurse|ForEach-Object {@{file=$_.FullName.Substring($backupRoot.Length+1);sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}})
         @{dataset='isolated-f5';checkpoint=(Get-Date).ToUniversalTime().ToString('o');mode='fixture-only';files=$files}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $backupRoot 'manifest.json') -Encoding utf8
         Write-Output 'F5 checkpoint verified across five temporary databases and private files.'
+        if($replay){
+            $localDb=$restoreMySql['multilider_tests_isolated'];$identityDb=$restoreMySql['multilider_identity_tests_isolated']
+            & $mysql @common "--execute=GRANT ALL PRIVILEGES ON $localDb.* TO 'multilider_test'@'127.0.0.1'; GRANT ALL PRIVILEGES ON $identityDb.* TO 'identity_test'@'127.0.0.1';"
+            if($LASTEXITCODE -ne 0){throw 'Restored test grants failed.'}
+            Set-F5 'DB_DATABASE' $localDb;Set-F5 'MULTILIDER_F5_RESTORED_MYSQL' $localDb
+            Set-F5 'MULTILIDER_IDENTITY_DATABASE' $identityDb;Set-F5 'MULTILIDER_F5_RESTORED_IDENTITY' $identityDb
+            Set-F5 'MULTILIDER_F5_RESTORED_STORAGE' (Join-Path $backupRoot 'laravel-storage')
+            Set-F5 'ConnectionStrings__MySQL' "Server=127.0.0.1;Port=$env:DB_PORT;Database=$identityDb;User=$env:MULTILIDER_IDENTITY_USER;Password=$env:MULTILIDER_IDENTITY_PASSWORD"
+            Set-F5 'Storage__Path' (Join-Path $backupRoot 'f5-private-documents');Set-F5 'Storage__PhotosPath' (Join-Path $backupRoot 'f5-private-photos')
+            foreach($role in $roles){
+                Set-F5 'Operations__ClientCertificatePath' $certs[$role]
+                Set-F5 'Operations__WorkerEnabled' $(if($role -eq 'comercial'){'true'}else{'false'})
+                if($role -ne 'seguridad'){Set-F5 'ConnectionStrings__SqlServer' $restoreSql[$role]}
+                $launch=$launches[$role]
+                $null=Start-F5 "f5-$role-restored" $launch.file $launch.args $launch.folder
+                Wait-F5 $launch.probe 401
+            }
+            foreach($mode in @('local','remote')){
+                Set-F5 'APP_ARCHITECTURE' $(if($mode -eq 'local'){'local'}else{'microservices'})
+                Set-F5 'APP_CONFIG_CACHE' "storage/framework/testing/f5-restored-$mode-config.php"
+                & php (Join-Path $backend 'tests/Support/CacheFixture.php')
+                if($LASTEXITCODE -ne 0){throw 'Restored Laravel config failed.'}
+                $launch=$launches[$(if($mode -eq 'local'){'laravel-local'}else{'laravel'})]
+                $null=Start-F5 "f5-laravel-$mode-restored" $launch.file $launch.args $launch.folder
+                Wait-F5 $launch.probe 401
+            }
+            & php (Join-Path $backend 'tests/Support/PhaseFiveReplay.php') verify
+            if($LASTEXITCODE -ne 0){throw 'Restored set replay failed.'}
+        }
     }
 } finally {
     $recoveryState=Join-Path $runtime 'f5-recovery-state.json'
     if(Test-Path -LiteralPath $recoveryState){Remove-Item -LiteralPath $recoveryState -Force}
     foreach($p in $processes){if(!$p.HasExited){& taskkill.exe /PID $p.Id /T /F 2>$null | Out-Null;$p.WaitForExit(5000)|Out-Null}}
+    foreach($database in $restoreMySql.Values){
+        if($database -notmatch '^multilider_f5_restore_[a-f0-9]{32}$' -or !$mysqlRestoreArgs){throw 'Unsafe MySQL restore cleanup.'}
+        & $mysql @mysqlRestoreArgs "--execute=DROP DATABASE IF EXISTS $database"
+        if($LASTEXITCODE -ne 0){throw 'Could not clean isolated MySQL restore.'}
+    }
     foreach($role in @('propiedades','comercial','finanzas')){
         $name=@{propiedades='MULTILIDER_PROPERTIES_TEST_CONNECTION';comercial='MULTILIDER_COMERCIAL_TEST_CONNECTION';finanzas='MULTILIDER_FINANZAS_TEST_CONNECTION'}[$role]
         [Environment]::SetEnvironmentVariable($name,$connections[$role],'Process')
         $fixture=Join-Path (Join-Path $workspace $folders[$role]) 'tests\FixtureSetup\bin\Debug\net10.0\FixtureSetup.dll'
-        if(Test-Path $fixture){& $dotnet $fixture drop}
+        if(Test-Path $fixture){
+            & $dotnet $fixture drop
+            if($restoreSql.ContainsKey($role)){
+                [Environment]::SetEnvironmentVariable($name,$restoreSql[$role],'Process')
+                & $dotnet $fixture drop
+            }
+        }
     }
     foreach($name in $previous.Keys){if($null -eq $previous[$name]){Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
 }
