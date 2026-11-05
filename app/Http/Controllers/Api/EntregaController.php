@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Entrega;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use App\Services\PublicPdfAttachment;
 
 class EntregaController extends Controller
 {
@@ -75,14 +76,11 @@ class EntregaController extends Controller
 
         $entrega = Entrega::findOrFail($id);
 
-        if ($entrega->url_acta) {
-            $oldPath = ltrim(str_replace('/storage', '', $entrega->url_acta), '/');
-            Storage::disk('public')->delete($oldPath);
-        }
-
-        $path = $request->file('acta')->store("entregas/{$entrega->id}", 'public');
-        $entrega->url_acta = Storage::url($path);
+        $previousUrl = $entrega->url_acta;
+        $directory = "entregas/{$entrega->id}";
+        $entrega->url_acta = PublicPdfAttachment::store($request->file('acta'), $directory);
         $entrega->save();
+        PublicPdfAttachment::retireAfterCommit($previousUrl, $directory);
 
         return response()->json([
             'message' => 'Acta de entrega subida correctamente.',

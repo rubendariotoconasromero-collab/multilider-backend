@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Contrato;
 use App\Models\Entrega;
+use App\Services\PublicPdfAttachment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use App\Services\PdfFactory;
@@ -59,14 +60,11 @@ class ContratoController extends Controller
             return response()->json(['message' => 'No se puede modificar un contrato anulado.'], 400);
         }
 
+        $directory = "contratos/{$contrato->id}";
+        $previousUrl = null;
         if ($request->hasFile('archivo')) {
-            if ($contrato->url_doc) {
-                $oldPath = ltrim(str_replace('/storage', '', $contrato->url_doc), '/');
-                Storage::disk('public')->delete($oldPath);
-            }
-
-            $path = $request->file('archivo')->store("contratos/{$contrato->id}", 'public');
-            $contrato->url_doc = Storage::url($path);
+            $previousUrl = $contrato->url_doc;
+            $contrato->url_doc = PublicPdfAttachment::store($request->file('archivo'), $directory);
         }
 
         $firmado = filter_var($request->input('firmado', false), FILTER_VALIDATE_BOOLEAN);
@@ -97,6 +95,7 @@ class ContratoController extends Controller
                 $entrega->update(['fecha_programada' => $fechaProgramada]);
             }
         }
+        PublicPdfAttachment::retireAfterCommit($previousUrl, $directory);
 
         return response()->json([
             'message' => 'Contrato actualizado correctamente.',

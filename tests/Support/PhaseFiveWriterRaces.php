@@ -7,21 +7,30 @@ use Psr\Http\Message\ResponseInterface;
 $first = saleF5();
 $second = operationF5() + array_replace($first, ['cliente_id' => waitF5($numeric['operacion_id'])['resource_id']]);
 $boundary = checkpointF5($first['operacion_id'], 'Reservar', 'before');
+$otherBoundary = checkpointF5($second['operacion_id'], 'Reservar', 'before');
 [$status] = callF5('POST', 'ventas', $first);
 checkF5($status === 202, 'First buyer sale not admitted.');
 try {
     hitF5($boundary);
-    $winner = completedSaleF5($second);
+    [$status] = callF5('POST', 'ventas', $second);
+    checkF5($status === 202, 'Second buyer sale not admitted.');
+    hitF5($otherBoundary);
+    checkF5(file_get_contents($boundary.'.hit') !== file_get_contents($otherBoundary.'.hit'), 'Both reservation requests must originate in distinct workers.');
 } finally {
     file_put_contents($boundary.'.release', '');
+    file_put_contents($otherBoundary.'.release', '');
 }
-$lost = waitF5($first['operacion_id']);
+$outcomes = [waitF5($first['operacion_id']), waitF5($second['operacion_id'])];
+$won = array_values(array_filter($outcomes, fn ($op) => $op['state'] === 'Completada'));
+checkF5(count($won) === 1, 'The simultaneous buyers did not yield exactly one winner.');
+$winner = $won[0]['venta_id'];
+$lost = array_values(array_filter($outcomes, fn ($op) => $op['state'] !== 'Completada'))[0];
 checkF5(in_array($lost['state'], ['Compensada', 'Rechazada'], true) && ! ($lost['venta_id'] ?? null), 'The other buyer kept a sale without the reservation.');
 [$status, $sameProperty] = callF5('GET', 'ventas?tipo_venta=CONTADO&per_page=100');
 $winners = array_values(array_filter($sameProperty['data'], fn ($sale) => $sale['propiedad_id'] === $first['propiedad_id'] && $sale['estado'] === 'Completada'));
 checkF5($status === 200 && count($winners) === 1 && $winners[0]['id'] === $winner
     && propertyStateF5($first['propiedad_id']) === 'Vendido', 'Competing buyer was able to take the confirmed property.');
-echo "F5-S04: overlapping operations for two clients left one confirmed sale and one terminal loser.\n";
+echo "F5-S04: two workers sent competing reservations for one property; one sale confirmed and the loser kept no obligation.\n";
 
 $stale = saleF5();
 $propertyId = $stale['propiedad_id'];
@@ -128,7 +137,7 @@ foreach (['before', 'after'] as $side) {
 }
 echo "F5-N04/F17: closure competed with two disbursement requests and preserved a single payout and receipt or terminal cancellation.\n";
 
-foreach (['delivery', 'cancellation'] as $firstWriter) {
+foreach (['delivery', 'cancellation', 'parallel'] as $firstWriter) {
     $offer = saleF5();
     $saleId = completedSaleF5($offer);
     [$status, $contracts] = callF5('GET', 'contratos?per_page=100');
@@ -147,7 +156,7 @@ foreach (['delivery', 'cancellation'] as $firstWriter) {
         [$cancelled] = callF5('PUT', "ventas/$saleId/anular", $cancel);
         checkF5($delivered === 200 && $cancelled === 409 && propertyStateF5($offer['propiedad_id']) === 'Vendido',
             'An already delivered property could be released.');
-    } else {
+    } elseif ($firstWriter === 'cancellation') {
         $boundary = checkpointF5($cancel['operacion_id'], 'CerrarFinanzas', 'before');
         [$status] = callF5('PUT', "ventas/$saleId/anular", $cancel);
         checkF5($status === 202, 'Cancellation competing with delivery was not admitted.');
@@ -160,9 +169,24 @@ foreach (['delivery', 'cancellation'] as $firstWriter) {
         }
         checkF5(waitF5($cancel['operacion_id'])['state'] === 'Completada' && propertyStateF5($offer['propiedad_id']) === 'Disponible',
             'Cancellation and delivery reached inconsistent states.');
+    } else {
+        $commercial = endpointF5('PHASE5_COMMERCIAL');
+        [$deliveryResponse, $cancelResponse] = Utils::unwrap([
+            asyncF5($commercial, $token, 'PUT', "entregas/$deliveryId", $complete),
+            asyncF5($commercial, $token, 'POST', "operaciones/ventas/$saleId/anular", $cancel),
+        ]);
+        $delivered = $deliveryResponse->getStatusCode();
+        $cancelled = $cancelResponse->getStatusCode();
+        checkF5(in_array([$delivered, $cancelled], [[200, 409], [409, 202]], true), 'Parallel delivery and cancellation returned an unsafe pair.');
+        $firstWriter = $delivered === 200 ? 'delivery' : 'cancellation';
+        if ($firstWriter === 'cancellation') {
+            checkF5(waitF5($cancel['operacion_id'])['state'] === 'Completada', 'Winning parallel cancellation did not complete.');
+        }
+        checkF5(propertyStateF5($offer['propiedad_id']) === ($firstWriter === 'delivery' ? 'Vendido' : 'Disponible'),
+            'Parallel delivery and cancellation left a wrong property state.');
     }
     [$status, $deliveries] = callF5('GET', 'entregas?per_page=100');
     $state = array_column($deliveries['data'] ?? [], 'estado', 'id')[$deliveryId] ?? null;
     checkF5($status === 200 && $state === ($firstWriter === 'delivery' ? 'Entregado' : 'Anulada'), 'Terminal delivery state is inconsistent.');
 }
-echo "F5-N05: completed delivery prevents cancellation, and admitted cancellation prevents delivery before release.\n";
+echo "F5-N05: simultaneous HTTP writers and both explicit orderings preserved a single delivery/cancellation outcome.\n";

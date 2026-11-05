@@ -13,14 +13,15 @@ function callF5(string $method, string $path, ?array $body = null): array
     return [$r->getStatusCode(), json_decode((string) $r->getBody(), true)];
 }
 function checkF5(bool $value, string $message): void { global $checks; if (! $value) { throw new RuntimeException($message); } $checks++; }
-function waitF5(string $id): array
+function waitF5(string $id, int $seconds = 18): array
 {
-    for ($i = 0; $i < 180; $i++) {
+    $deadline = microtime(true) + $seconds;
+    do {
         [$status, $body] = callF5('GET', 'operaciones/'.$id);
         if ($status !== 200) { throw new RuntimeException('Progress query failed: '.$status); }
         if (in_array($body['state'] ?? '', ['Completada', 'Rechazada', 'Compensada', 'RequiereRevision'], true)) { return $body; }
         usleep(100000);
-    }
+    } while (microtime(true) < $deadline);
     throw new RuntimeException('Operation did not reach terminal state: '.($body['step'] ?? '').'/'.($body['error_code'] ?? '').'; attempts='.($body['attempts'] ?? ''));
 }
 function uuidF5(): string { return (string) Illuminate\Support\Str::uuid(); }
@@ -127,6 +128,35 @@ try {
     $response = $client->post('/api/entregas/'.$delivery.'/subir-acta', ['headers' => ['Accept' => 'application/json', 'Authorization' => 'Bearer '.$token, 'Idempotency-Key' => uuidF5()],
         'multipart' => [['name' => 'acta', 'contents' => $file, 'filename' => 'acta-fixture.pdf']]]);
     checkF5($response->getStatusCode() === 200, 'Delivery attachment field compatibility failed.');
+    $contractId = $contract['id'];
+    foreach (["contratos/$contractId/descargar", "entregas/$delivery/descargar-acta"] as $path) {
+        $allowed = $client->get('/api/'.$path, ['headers' => ['Authorization' => 'Bearer '.$token, 'Accept' => 'application/json']]);
+        $foreign = $client->get('/api/'.$path, ['headers' => ['Authorization' => 'Bearer '.$clientLogin['access_token'], 'Accept' => 'application/json']]);
+        $anonymous = $client->get('/api/'.$path, ['headers' => ['Accept' => 'application/json']]);
+        checkF5($allowed->getStatusCode() === 200 && (string) $allowed->getBody() === $file
+            && $foreign->getStatusCode() === 403 && $anonymous->getStatusCode() === 401, 'Foreign client or anonymous request accessed a document by ID.');
+    }
+    $badDocument = $client->post("/api/contratos/$contractId/gestionar", [
+        'headers' => ['Authorization' => 'Bearer '.$token, 'Accept' => 'application/json', 'Idempotency-Key' => uuidF5()],
+        'multipart' => [
+            ['name' => 'archivo', 'contents' => '<html>not a PDF</html>', 'filename' => '../claimed.pdf', 'headers' => ['Content-Type' => 'application/pdf']],
+            ['name' => 'firmado', 'contents' => '1'],
+        ],
+    ]);
+    $stillOriginal = $client->get("/api/contratos/$contractId/descargar", ['headers' => ['Authorization' => 'Bearer '.$token]]);
+    checkF5($badDocument->getStatusCode() === 422 && (string) $stillOriginal->getBody() === $file, 'Forged PDF MIME replaced the current document.');
+    [$status, $unsigned] = callF5('POST', "contratos/$contractId/gestionar", ['command_id' => uuidF5(), 'operacion_id' => uuidF5(), 'firmado' => false]);
+    checkF5($status === 200 && $unsigned['data']['estado'] === 'Pendiente', 'Pending delivery prevented removing an existing signature.');
+    [$status] = callF5('PUT', "entregas/$delivery", ['command_id' => uuidF5(), 'operacion_id' => uuidF5(),
+        'estado' => 'Diferido', 'fecha_programada' => '2026-11-10']);
+    checkF5($status === 409, 'Unsigned contract permitted a delivery change.');
+    [$status, $signedAgain] = callF5('POST', "contratos/$contractId/gestionar", ['command_id' => uuidF5(), 'operacion_id' => uuidF5(),
+        'firmado' => true, 'fecha_firma' => '2026-11-05', 'fecha_programada_entrega' => '2026-11-10']);
+    checkF5($status === 200 && $signedAgain['data']['estado'] === 'Firmado', 'Could not sign the contract again.');
+    [$status, $rescheduled] = callF5('GET', 'entregas');
+    checkF5($status === 200 && count($rescheduled['data']) === 1 && $rescheduled['data'][0]['id'] === $delivery
+        && $rescheduled['data'][0]['fecha_programada'] === '2026-11-10', 'Re-signing duplicated delivery or did not reschedule.');
+    echo "F5-D03/D05: signature and re-schedule cycle, and authenticated contract/acta download authorization verified.\n";
     [$status, $commissions] = callF5('GET', 'comisiones-asesores');
     checkF5($status === 200 && $commissions['meta']['total'] === 1 && (float) $commissions['data'][0]['total_deuda_bs'] === 600.0, 'Commission aggregation failed.');
     [$status, $details] = callF5('GET', 'comisiones-asesores/1/impagas');

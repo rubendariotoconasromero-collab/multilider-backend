@@ -7,11 +7,14 @@ param(
     [switch]$RecoveryTests,
     [switch]$RestoreTests,
     [switch]$AcceptanceTests,
+    [switch]$RotationTests,
+    [switch]$CrashTests,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$TestArguments
 )
 $ErrorActionPreference = 'Stop'
 if ($IntegrationOnly -and !$Integration) { throw '-IntegrationOnly requiere -Integration.' }
 if ($AcceptanceTests -and (!$Integration -or !$Phase5)) { throw '-AcceptanceTests requiere -Integration -Phase5.' }
+if (($RotationTests -or $CrashTests) -and (!$Integration -or !$Phase5)) { throw '-RotationTests y -CrashTests requieren -Integration -Phase5.' }
 $project = Split-Path $PSScriptRoot -Parent
 $runtime = Join-Path $project 'storage\framework\testing'
 $data = Join-Path $runtime 'mysql'
@@ -69,7 +72,7 @@ try {
             $result = $LASTEXITCODE
         }
         if ($result -eq 0 -and $Integration) {
-            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -AcceptanceTests:$AcceptanceTests -MySqlBin $MySqlBin }
+            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -AcceptanceTests:$AcceptanceTests -RotationTests:$RotationTests -CrashTests:$CrashTests -MySqlBin $MySqlBin }
             else { & (Join-Path $PSScriptRoot 'integration-f3.ps1') -BrowserTests:$BrowserTests }
             $result = $LASTEXITCODE
         }

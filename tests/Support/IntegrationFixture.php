@@ -76,6 +76,12 @@ if ($action === 'prepare') {
         $pdo->exec("INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id) VALUES(1,$link)");
     }
     $pdo->exec("INSERT INTO roles(nombre,estado) VALUES('Cliente',1),('Asesor de Ventas',1)");
+    $pdo->exec("INSERT INTO users(nombre,correo,password,estado)
+        SELECT 'Vendedor con permiso exclusivo', 'sales-only@example.test', password, 1 FROM users WHERE correo='operator@example.test'");
+    $seller = (int) $pdo->lastInsertId();
+    $linkSeller = $pdo->prepare("INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id)
+        SELECT ?,rp.id FROM rol_permiso rp JOIN permisos p ON p.id=rp.permiso_id WHERE p.nombre='acceso_ventas'");
+    $linkSeller->execute([$seller]);
     echo "F5 role and permission fixtures prepared.\n";
 } elseif ($action === 'verify-migration') {
     $pdo = identityDb();

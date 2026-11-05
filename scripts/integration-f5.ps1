@@ -1,4 +1,4 @@
-param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[string]$MySqlBin)
+param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[switch]$RotationTests,[switch]$CrashTests,[string]$MySqlBin)
 $ErrorActionPreference='Stop'
 if($env:MULTILIDER_TEST_ISOLATED -ne '1' -or $env:DB_DATABASE -ne 'multilider_tests_isolated' -or $env:DB_PORT -eq '3306'){throw 'Run test-isolated.ps1 -Integration -Phase5.'}
 $backend=Split-Path $PSScriptRoot -Parent
@@ -16,7 +16,7 @@ function Port-F5 {
 function Start-F5([string]$name,[string]$executable,[string[]]$arguments,[string]$directory) {
     $priorHook=$env:DOTNET_STARTUP_HOOKS
     try {
-        if($AcceptanceTests -and $name -like 'f5-comercial*'){
+        if(($AcceptanceTests -or $CrashTests) -and $name -like 'f5-comercial*'){
             $env:DOTNET_STARTUP_HOOKS=Join-Path $workspace 'multilider-ms-comercial\tests\FixtureSetup\bin\Debug\net10.0\FixtureSetup.dll'
         }
         $p=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtime "$name.out.log") -RedirectStandardError (Join-Path $runtime "$name.err.log")
@@ -36,10 +36,31 @@ function Normalize-F5Dump([string]$path) {
     # Normalize only column declarations; data, constraints and collation remain exact.
     [regex]::Replace([IO.File]::ReadAllText($path),'(?m)^(  \x60[^\r\n]+?) CHARACTER SET ([a-z0-9]+) COLLATE (\2_[a-z0-9_]+)','$1 COLLATE $3')
 }
+function Stop-OwnedF5([Diagnostics.Process]$process) {
+    if(!$processes.Contains($process) -or $process.HasExited){throw 'Only an owned running fixture may be stopped.'}
+    Stop-Process -InputObject $process -Force
+    if(!$process.WaitForExit(5000)){throw 'Owned fixture did not stop.'}
+    $processes.Remove($process)|Out-Null
+}
+function Set-F5Role([string]$name,[hashtable]$sqlConnections=$connections) {
+    $role=if($name -eq 'comercial-second'){'comercial'}else{$name}
+    if($role -notin $roles){throw 'Unknown fixture role.'}
+    Set-F5 'Operations__ClientCertificatePath' $certs[$role]
+    Set-F5 'Operations__ServerCertificatePath' $serverCerts[$role]
+    Set-F5 'Operations__ServerCertificatePassword' $serverPasswords[$role]
+    Set-F5 'Operations__WorkerEnabled' $(if($role -eq 'comercial'){'true'}else{'false'})
+    if($role -ne 'seguridad'){Set-F5 'ConnectionStrings__SqlServer' $sqlConnections[$role]}
+}
+function Restart-F5([string]$name,[string]$suffix) {
+    if($name -ne 'laravel'){Set-F5Role $name}
+    $launch=$launches[$name]
+    $started[$name]=Start-F5 "f5-$name-$suffix" $launch.file $launch.args $launch.folder
+    Wait-F5 $launch.probe 401
+}
 $roles=@('seguridad','propiedades','comercial','finanzas')
 $folders=@{seguridad='multilider-ms-seguridad';propiedades='multilider-ms-propiedades';comercial='multilider-ms-comercial';finanzas='multilider-ms-finanzas'}
 $dlls=@{seguridad='MSMultilider.Seguridad';propiedades='MSMultilider.Propiedades';comercial='MSMultilider.Comercial';finanzas='MSMultilider.Finanzas'}
-$http=@{};$tls=@{};$pins=@{};$certs=@{}
+$http=@{};$tls=@{};$pins=@{};$certs=@{};$serverCerts=@{};$serverPasswords=@{}
 foreach($role in $roles){$http[$role]=Port-F5;$tls[$role]=Port-F5}
 $backendPort=Port-F5;$localPort=Port-F5;$uiLocalPort=Port-F5;$uiRemotePort=Port-F5;$uiDirectPort=Port-F5;$secondCommercialPort=Port-F5;$dotnet=(Get-Command dotnet).Source
 $securityRuntime=Join-Path $workspace 'multilider-ms-seguridad\.artifacts\runtime8\dotnet.exe'
@@ -52,7 +73,7 @@ $connections=@{
 }
 try {
     if(!(Test-Path $securityRuntime)){throw 'Private ASP.NET8 runtime from F3 required.'}
-    if($AcceptanceTests){
+    if($AcceptanceTests -or $CrashTests){
         $boundaryDir=Join-Path $runtime ('f5-boundary-'+[Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $boundaryDir|Out-Null
         Set-F5 'MULTILIDER_F5_BOUNDARY_DIR' $boundaryDir
@@ -68,6 +89,7 @@ try {
         $path=Join-Path $runtime "f5-$role-client.pfx"
         [IO.File]::WriteAllBytes($path,$cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pfx,$password))
         $certs[$role]=$path;$pins[$role]=$cert.GetCertHashString([Security.Cryptography.HashAlgorithmName]::SHA256)
+        $serverCerts[$role]=$server.server_path;$serverPasswords[$role]=$server.password
         $cert.Dispose();$rsa.Dispose()
     }
     Set-F5 'ASPNETCORE_ENVIRONMENT' 'Testing';Set-F5 'Logging__LogLevel__Default' 'Error';Set-F5 'Logging__LogLevel__Multilider.Operations.OperationChannel' 'Warning'
@@ -104,13 +126,12 @@ try {
         Set-F5 'ConnectionStrings__SqlServer' $connections[$role]
         $name=@{propiedades='MULTILIDER_PROPERTIES_TEST_CONNECTION';comercial='MULTILIDER_COMERCIAL_TEST_CONNECTION';finanzas='MULTILIDER_FINANZAS_TEST_CONNECTION'}[$role]
         Set-F5 $name $connections[$role]
-        & dotnet run --project (Join-Path (Join-Path $workspace $folders[$role]) 'tests\FixtureSetup\FixtureSetup.csproj')
+        $fixtureArgs=if($AcceptanceTests -and $role -in @('comercial','finanzas')){@('--','upgrade-f4')}else{@()}
+        & dotnet run --project (Join-Path (Join-Path $workspace $folders[$role]) 'tests\FixtureSetup\FixtureSetup.csproj') @fixtureArgs
         if($LASTEXITCODE -ne 0){throw "SQL fixture failed: $role"}
     }
     foreach($role in $roles){
-        Set-F5 'Operations__ClientCertificatePath' $certs[$role]
-        Set-F5 'Operations__WorkerEnabled' $(if($role -eq 'comercial'){'true'}else{'false'})
-        if($role -ne 'seguridad'){Set-F5 'ConnectionStrings__SqlServer' $connections[$role]}
+        Set-F5Role $role
         $folder=Join-Path $workspace $folders[$role];$framework=if($role -eq 'seguridad'){'net8.0'}else{'net10.0'}
         $executable=if($role -eq 'seguridad'){$securityRuntime}else{$dotnet}
         $launch=@((Join-Path $folder "bin\Debug\$framework\$($dlls[$role]).dll"),'--urls',"http://127.0.0.1:$($http[$role]);https://127.0.0.1:$($tls[$role])")
@@ -119,7 +140,7 @@ try {
         $launches[$role]=@{file=$executable;args=$launch;folder=$folder;probe="http://127.0.0.1:$($http[$role])/api/$probe"}
         Wait-F5 $launches[$role].probe 401
     }
-    Set-F5 'Operations__ClientCertificatePath' $certs.comercial;Set-F5 'Operations__WorkerEnabled' 'true';Set-F5 'ConnectionStrings__SqlServer' $connections.comercial
+    Set-F5Role 'comercial-second'
     $launches['comercial-second']=@{file=$dotnet;args=@((Join-Path $workspace 'multilider-ms-comercial\bin\Debug\net10.0\MSMultilider.Comercial.dll'),'--urls',"http://127.0.0.1:$secondCommercialPort");folder=(Join-Path $workspace 'multilider-ms-comercial');probe="http://127.0.0.1:$secondCommercialPort/api/ventas"}
     $second=$launches['comercial-second'];$started['comercial-second']=Start-F5 'f5-comercial-second' $second.file $second.args $second.folder
     Wait-F5 $second.probe 401
@@ -166,7 +187,7 @@ try {
         }
     } finally {$knownCert.Dispose()}
     Write-Output 'F5 mTLS negative checks: missing certificate, wrong scope and missing grant rejected.'
-    if($BrowserTests -or $RecoveryTests -or $AcceptanceTests) {
+    if($BrowserTests -or $RecoveryTests -or $AcceptanceTests -or $RotationTests -or $CrashTests) {
         Set-F5 'APP_ARCHITECTURE' 'local';Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-local-config.php'
         & php (Join-Path $backend 'tests/Support/CacheFixture.php')
         if($LASTEXITCODE -ne 0){throw 'Local config cache failed.'}
@@ -198,6 +219,9 @@ try {
         Set-F5 'PHASE5_SECURITY' "http://127.0.0.1:$($http.seguridad)"
         & php (Join-Path $backend 'tests/Support/PhaseFiveAcceptance.php')
         if($LASTEXITCODE -ne 0){throw 'F5 acceptance checks failed.'}
+        & php (Join-Path $backend 'tests/Support/PhaseFiveFinanceComplements.php')
+        if($LASTEXITCODE -ne 0){throw 'F5 additional finance checks failed.'}
+        & (Join-Path $PSScriptRoot 'reservation-acceptance-f5.ps1')
     }
     if($RecoveryTests) {
         Set-F5 'PHASE5_API_LOCAL' "http://127.0.0.1:$localPort"
@@ -207,28 +231,19 @@ try {
             if($LASTEXITCODE -ne 0){throw "Recovery fixture failed: $target"}
             $stopped=@($target);if($target -eq 'comercial'){$stopped+=@('comercial-second')}
             foreach($name in $stopped) {
-                $owned=$started[$name]
-                if(!$processes.Contains($owned)){throw 'Only owned fixture processes may be stopped.'}
-                & taskkill.exe /PID $owned.Id /T /F 2>$null | Out-Null
-                if(!$owned.WaitForExit(5000)){throw "Fixture did not stop: $name"}
-                $processes.Remove($owned)|Out-Null
+                Stop-OwnedF5 $started[$name]
             }
             & php $exercise offline $target
             if($LASTEXITCODE -ne 0){throw "Offline fixture failed: $target"}
             foreach($name in $stopped) {
-                if($name -ne 'laravel') {
-                    $role=if($name -eq 'comercial-second'){'comercial'}else{$name}
-                    Set-F5 'Operations__ClientCertificatePath' $certs[$role]
-                    Set-F5 'Operations__WorkerEnabled' $(if($role -eq 'comercial'){'true'}else{'false'})
-                    if($role -ne 'seguridad'){Set-F5 'ConnectionStrings__SqlServer' $connections[$role]}
-                }
-                $launch=$launches[$name];$started[$name]=Start-F5 "f5-$name-restarted" $launch.file $launch.args $launch.folder
-                Wait-F5 $launch.probe 401
+                Restart-F5 $name 'restarted'
             }
             & php $exercise recover $target
             if($LASTEXITCODE -ne 0){throw "Recovery check failed: $target"}
         }
     }
+    if($RotationTests){& (Join-Path $PSScriptRoot 'rotation-f5.ps1')}
+    if($CrashTests){& (Join-Path $PSScriptRoot 'crash-f5.ps1')}
     if($BrowserTests) {
         $frontend=Join-Path $workspace 'frontend';$vite=Join-Path $frontend 'node_modules\vite\bin\vite.js'
         Set-F5 'PLAYWRIGHT_BROWSERS_PATH' (Join-Path $frontend '.phase3\browsers')
@@ -336,11 +351,9 @@ try {
             Set-F5 'ConnectionStrings__MySQL' "Server=127.0.0.1;Port=$env:DB_PORT;Database=$identityDb;User=$env:MULTILIDER_IDENTITY_USER;Password=$env:MULTILIDER_IDENTITY_PASSWORD"
             Set-F5 'Storage__Path' (Join-Path $backupRoot 'f5-private-documents');Set-F5 'Storage__PhotosPath' (Join-Path $backupRoot 'f5-private-photos')
             foreach($role in $roles){
-                Set-F5 'Operations__ClientCertificatePath' $certs[$role]
-                Set-F5 'Operations__WorkerEnabled' $(if($role -eq 'comercial'){'true'}else{'false'})
-                if($role -ne 'seguridad'){Set-F5 'ConnectionStrings__SqlServer' $restoreSql[$role]}
+                Set-F5Role $role $restoreSql
                 $launch=$launches[$role]
-                $null=Start-F5 "f5-$role-restored" $launch.file $launch.args $launch.folder
+                $started[$role]=Start-F5 "f5-$role-restored" $launch.file $launch.args $launch.folder
                 Wait-F5 $launch.probe 401
             }
             foreach($mode in @('local','remote')){
@@ -354,6 +367,7 @@ try {
             }
             & php (Join-Path $backend 'tests/Support/PhaseFiveReplay.php') verify
             if($LASTEXITCODE -ne 0){throw 'Restored set replay failed.'}
+            & (Join-Path $PSScriptRoot 'rollback-f5.ps1')
         }
     }
 } finally {

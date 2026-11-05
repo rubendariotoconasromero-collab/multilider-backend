@@ -53,7 +53,7 @@ function operationF5(): array
     return ['operacion_id' => uuidF5(), 'command_id' => uuidF5()];
 }
 
-function saleF5(): array
+function saleF5(string $price = '10000.00', string $currency = 'BOB'): array
 {
     [$status, $catalog] = callF5('GET', 'propiedades');
     checkF5($status === 200 && isset($catalog['data'][0]), 'Acceptance catalog unavailable.');
@@ -61,14 +61,14 @@ function saleF5(): array
     [$status, $created] = callF5('POST', 'propiedades', operationF5() + [
         'propietario_ids' => array_column($source['propietarios'], 'id'),
         'sector_urbano_id' => $source['sector_urbano_id'], 'tipo' => 'Lote',
-        'precio_venta' => '10000.00', 'moneda' => 'BOB', 'superficie_m2' => '200.00', 'activo' => true,
+        'precio_venta' => $price, 'moneda' => $currency, 'superficie_m2' => '200.00', 'activo' => true,
     ]);
     checkF5($status === 201, 'Acceptance property creation failed: '.$status);
     $property = $created['data'];
 
     return operationF5() + ['cliente_id' => 1, 'asesor_id' => 1, 'propiedad_id' => $property['id'],
         'expected_version' => $property['version'] ?? null, 'fecha' => '2026-11-04',
-        'tipo_venta' => 'CONTADO', 'monto_total' => 10000, 'monto_liquido' => 10000];
+        'tipo_venta' => 'CONTADO', 'monto_total' => $price, 'monto_liquido' => $price];
 }
 
 function payF5(int $sale): array
