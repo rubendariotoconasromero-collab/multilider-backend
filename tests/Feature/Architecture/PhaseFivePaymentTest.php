@@ -71,6 +71,28 @@ final class PhaseFivePaymentTest extends TestCase
         $this->assertTrue($gateway->verify($reference, 'BOB', '0.20', '2026-11-05 10:00:00'));
     }
 
+    public function test_reference_from_another_merchant_cannot_confirm_local_order(): void
+    {
+        $order = (string) Str::uuid();
+        $reference = 'TEMP-'.$order;
+        config(['services.libelula.api_key' => 'fixture-merchant-a', 'services.libelula.base_url' => 'https://payments.example.test']);
+        DB::table('payment_test_orders')->insert(['id' => $order, 'reference' => $reference, 'request_hash' => str_repeat('c', 64),
+            'cliente_id' => 1, 'state' => 'Registrada', 'amount' => 0.20, 'currency' => 'BOB',
+            'selection' => '[]', 'created_at' => now(), 'updated_at' => now()]);
+        Http::preventStrayRequests();
+        Http::fake(['payments.example.test/rest/deuda/consultar_deudas/por_fechas' => function ($request) use ($reference) {
+            $row = ['identificador' => $reference, 'pagado' => true, 'valor_total' => '0.20', 'moneda' => 'BOB'];
+
+            return Http::response(['error' => 0, 'datos' => $request['appkey'] === 'fixture-merchant-b' ? [$row] : []]);
+        }]);
+        $this->postJson('/api/public/pagos/callback', ['identificador' => $reference, 'transaction_id' => 'fixture-other-merchant',
+            'error' => '0', 'appkey' => 'fixture-merchant-b'])->assertOk();
+        Http::assertSent(fn ($request) => $request['appkey'] === 'fixture-merchant-a');
+        Http::assertSentCount(1);
+        $this->assertDatabaseHas('payment_test_orders', ['id' => $order, 'state' => 'Registrada']);
+        $this->assertDatabaseCount('ingresos', 0);
+    }
+
     public function test_callback_write_failure_requires_retry_and_provider_timeout_keeps_the_order_pending(): void
     {
         config(['services.libelula.api_key' => 'fixture-not-a-real-key', 'services.libelula.base_url' => 'https://payments.example.test']);

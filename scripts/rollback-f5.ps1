@@ -42,6 +42,34 @@ if($LASTEXITCODE -ne 0 -or ($valid|ConvertFrom-Json).pending.Count -ne 0){throw 
 
 $snapshot='SELECT CONCAT((SELECT COUNT(*) FROM dbo.Ventas),''/'',(SELECT COUNT(*) FROM dbo.SaleOperation),''/'',(SELECT COUNT(*) FROM dbo.OperationStep));'
 $before=Invoke-RollbackFixtureSql $snapshot
+$archiveRoot=Join-Path $env:MULTILIDER_F5_BOUNDARY_DIR 'rollback-f4'
+$oldCommit='c009f30'
+New-Item -ItemType Directory -Path $archiveRoot | Out-Null
+$zip=Join-Path $archiveRoot 'comercial.zip'
+& git -C (Join-Path $workspace 'multilider-ms-comercial') archive --format=zip "--output=$zip" $oldCommit
+if($LASTEXITCODE -ne 0){throw 'Could not archive the F4 Comercial revision.'}
+$source=Join-Path $archiveRoot 'source'
+Expand-Archive -LiteralPath $zip -DestinationPath $source
+$envProject=Join-Path $source 'MSMultilider.Comercial.csproj'
+& $dotnet build $envProject -v q -p:NuGetAudit=false --ignore-failed-sources
+if($LASTEXITCODE -ne 0){throw 'Could not build the archived F4 revision from the local package cache.'}
+$oldDll=Join-Path $source 'bin\Debug\net10.0\MSMultilider.Comercial.dll'
+$fixtureTool=Join-Path $workspace 'multilider-ms-comercial\tests\FixtureSetup\bin\Debug\net10.0\FixtureSetup.dll'
+$manifest=& $dotnet $fixtureTool migration-manifest $oldDll
+if($LASTEXITCODE -ne 0){throw 'Could not inspect the archived F4 binary migrations.'}
+$known=$manifest|ConvertFrom-Json
+$applied=Invoke-RollbackFixtureSql 'SELECT MigrationId FROM dbo.__EFMigrationsHistory ORDER BY MigrationId;'
+$unknown=$applied -split '\s+' | Where-Object {$_ -and $_ -notin $known}
+if(!$known -or !$unknown -or '20261104235150_AvailabilityIntents' -notin $known){
+    throw 'The real F4 binary was not distinguished from the restored F5 schema.'
+}
+# The admission guard compares the migrations embedded in the executable before launch.
+Write-Output "F5-O07: archived F4 Comercial ($oldCommit) refused by the admission check; restored database contains migrations outside its binary manifest."
+Set-F5 'Migrations__DatabaseName' 'wrong_database_fixture'
+$mismatch=& $dotnet $dll --preflight-f5 2>&1
+if($LASTEXITCODE -eq 0 -or "$mismatch" -notmatch 'Explicit matching authority database'){throw 'Mismatched migration database was accepted.'}
+Write-Output 'F5-O05: preflight refused an explicitly mismatched database name.'
+Set-F5 'Migrations__DatabaseName' $database
 $future='20990101000000_IncompatibleFixture'
 $null=Invoke-RollbackFixtureSql "INSERT dbo.__EFMigrationsHistory (MigrationId,ProductVersion) VALUES ('$future','99.0.0');"
 try {

@@ -103,6 +103,19 @@ final class LocalBusinessCommands
         if (preg_match('~^api/egresos/([1-9][0-9]*)/anular$~D', $path, $m)) {
             abort_if(\App\Models\Egreso::whereKey($m[1])->where('estado', 'PAGADO')->exists(), 409, 'El desembolso requiere una reversión autorizada.');
         }
+        if ($request->isMethod('PUT') && preg_match('~^api/(ingresos|egresos)/([1-9][0-9]*)$~D', $path, $m)) {
+            $model = $m[1] === 'ingresos' ? \App\Models\Ingreso::class : \App\Models\Egreso::class;
+            $movement = $model::lockForUpdate()->findOrFail($m[2]);
+            if ($movement->origen === 'AUTOMATICO') {
+                foreach (['fecha', 'concepto', 'categoria', 'moneda', 'asesor_id'] as $field) {
+                    abort_if($request->exists($field) && (string) $request->input($field) !== (string) $movement->getRawOriginal($field),
+                        409, 'Los movimientos automáticos conservan los datos de la operación que los generó.');
+                }
+                $amount = $request->input('monto');
+                abort_if($request->exists('monto') && (! is_numeric($amount) || (float) $amount !== (float) $movement->monto),
+                    409, 'Los movimientos automáticos conservan el importe de la operación que los generó.');
+            }
+        }
     }
 
     private static function canonical(array $value): array

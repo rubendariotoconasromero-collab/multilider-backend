@@ -74,6 +74,9 @@ foreach($case in $cases){
 }
 & php $driver verify
 if($LASTEXITCODE -ne 0){throw 'F5 crash recovery verification failed.'}
+if(Get-ChildItem -LiteralPath $env:MULTILIDER_F5_BOUNDARY_DIR -Filter '*.resent'){
+    throw 'A committed remote command was dispatched again after losing its receipt.'
+}
 
 $recordFile=Join-Path $env:MULTILIDER_F5_BOUNDARY_DIR 'crash-cases.jsonl'
 $statements=[Collections.Generic.List[string]]::new()

@@ -69,7 +69,7 @@ if ($action === 'prepare') {
 } elseif ($action === 'phase5') {
     $pdo = identityDb();
     $localGrants = new class { use BusinessFixtures; public function add(string $name): void { $this->grant(\App\Models\User::where('correo', 'operator@example.test')->firstOrFail(), $name); } };
-    foreach (['acceso_clientes', 'acceso_asesores', 'acceso_historial_ventas', 'acceso_contratos', 'acceso_entregas', 'acceso_pagos', 'acceso_ingresos', 'acceso_egresos'] as $name) {
+    foreach (['acceso_clientes', 'acceso_asesores', 'acceso_historial_ventas', 'acceso_contratos', 'acceso_entregas', 'acceso_pagos', 'acceso_ingresos', 'acceso_egresos', 'acceso_empresa'] as $name) {
         $localGrants->add($name);
         $q = $pdo->prepare('INSERT INTO permisos(nombre,estado) VALUES(?,1)'); $q->execute([$name]); $permission = $pdo->lastInsertId();
         $pdo->exec("INSERT INTO rol_permiso(rol_id,permiso_id) VALUES(1,$permission)"); $link = $pdo->lastInsertId();
@@ -82,6 +82,27 @@ if ($action === 'prepare') {
     $linkSeller = $pdo->prepare("INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id)
         SELECT ?,rp.id FROM rol_permiso rp JOIN permisos p ON p.id=rp.permiso_id WHERE p.nombre='acceso_ventas'");
     $linkSeller->execute([$seller]);
+    $mailUser = 'f5-ui-fixture@tecnoweb.space';
+    $localOperator = \App\Models\User::where('correo', 'operator@example.test')->firstOrFail();
+    $localSeller = \App\Models\User::create(['nombre' => 'Vendedor ficticio', 'correo' => 'sales-only@example.test',
+        'password' => 'Test-only-Password-42!', 'estado' => true]);
+    DB::table('rol_permiso_usuario')->insertUsing(['user_id', 'rol_permiso_id'],
+        DB::table('rol_permiso')->join('permisos', 'permisos.id', '=', 'rol_permiso.permiso_id')
+            ->where('permisos.nombre', 'acceso_ventas')->selectRaw('? AS user_id, rol_permiso.id', [$localSeller->id]));
+    $localMail = \App\Models\User::create(['nombre' => 'Perfil ficticio', 'correo' => $mailUser,
+        'password' => 'Test-only-Password-42!', 'estado' => true]);
+    DB::table('rol_permiso_usuario')->insertUsing(['user_id', 'rol_permiso_id'],
+        DB::table('rol_permiso_usuario')->selectRaw('? AS user_id, rol_permiso_id', [$localMail->id])->where('user_id', $localOperator->id));
+    $pdo->prepare('INSERT INTO users(nombre,correo,password,estado) SELECT ?,?,password,1 FROM users WHERE id=1')
+        ->execute(['Perfil ficticio', $mailUser]);
+    $pdo->prepare('INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id) SELECT ?,rol_permiso_id FROM rol_permiso_usuario WHERE user_id=1')
+        ->execute([(int) $pdo->lastInsertId()]);
+    $company = DB::table('mi_empresa')->insertGetId(['nombre' => 'Empresa inicial de pruebas']);
+    DB::table('metodos_pago')->insert(['nombre_metodo' => 'Efectivo']);
+    DB::table('cuentas_bancarias')->insert([
+        ['mi_empresa_id' => $company, 'nombre' => 'Caja BOB', 'tipo' => 'EFECTIVO'],
+        ['mi_empresa_id' => $company, 'nombre' => 'Caja USD', 'tipo' => 'EFECTIVO'],
+    ]);
     echo "F5 role and permission fixtures prepared.\n";
 } elseif ($action === 'verify-migration') {
     $pdo = identityDb();

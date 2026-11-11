@@ -19,6 +19,9 @@ function Start-F5([string]$name,[string]$executable,[string[]]$arguments,[string
         if(($AcceptanceTests -or $CrashTests) -and $name -like 'f5-comercial*'){
             $env:DOTNET_STARTUP_HOOKS=Join-Path $workspace 'multilider-ms-comercial\tests\FixtureSetup\bin\Debug\net10.0\FixtureSetup.dll'
         }
+        if($AcceptanceTests -and $name -like 'f5-finanzas*'){
+            $env:DOTNET_STARTUP_HOOKS=Join-Path $workspace 'multilider-ms-finanzas\tests\FixtureSetup\bin\Debug\net10.0\FixtureSetup.dll'
+        }
         $p=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtime "$name.out.log") -RedirectStandardError (Join-Path $runtime "$name.err.log")
     } finally { $env:DOTNET_STARTUP_HOOKS=$priorHook }
     $processes.Add($p);return $p
@@ -49,6 +52,11 @@ function Set-F5Role([string]$name,[hashtable]$sqlConnections=$connections) {
     Set-F5 'Operations__ServerCertificatePath' $serverCerts[$role]
     Set-F5 'Operations__ServerCertificatePassword' $serverPasswords[$role]
     Set-F5 'Operations__WorkerEnabled' $(if($role -eq 'comercial'){'true'}else{'false'})
+    if($AcceptanceTests -and $role -eq 'finanzas'){
+        Set-F5 'PaymentTests__Enabled' 'true'
+        Set-F5 'Libelula__CallbackBaseUrl' 'https://payments.example.test'
+        Set-F5 'Libelula__FrontendUrl' 'https://payments.example.test'
+    }
     if($role -ne 'seguridad'){Set-F5 'ConnectionStrings__SqlServer' $sqlConnections[$role]}
 }
 function Restart-F5([string]$name,[string]$suffix) {
@@ -78,6 +86,9 @@ try {
         New-Item -ItemType Directory -Path $boundaryDir|Out-Null
         Set-F5 'MULTILIDER_F5_BOUNDARY_DIR' $boundaryDir
     }
+    if($AcceptanceTests){
+        Set-F5 'LOG_CHANNEL' 'stderr';Set-F5 'LOG_LEVEL' 'warning'
+    }
     & (Join-Path $PSScriptRoot 'tls-fixture-f4.ps1') -Directory $runtime
     $server=Get-Content (Join-Path $runtime 'tls-f4.json') -Raw | ConvertFrom-Json
     foreach($role in $roles){
@@ -104,7 +115,7 @@ try {
     }
     Set-F5 'Cors__AllowedOrigin' "http://127.0.0.1:$uiDirectPort"
     Set-F5 'CORS_ALLOWED_ORIGINS' "http://127.0.0.1:$uiLocalPort,http://127.0.0.1:$uiRemotePort,http://127.0.0.1:$uiDirectPort"
-    Set-F5 'Storage__Path' (Join-Path $runtime 'f5-private-documents')
+    Set-F5 'Storage__Path' $(if($AcceptanceTests -or $CrashTests){Join-Path $boundaryDir 'documents'}else{Join-Path $runtime 'f5-private-documents'})
     Set-F5 'Storage__PhotosPath' (Join-Path $runtime 'f5-private-photos')
     Set-F5 'Services__Seguridad'  "http://127.0.0.1:$($http.seguridad)"
     Set-F5 'ConnectionStrings__MySQL' "Server=127.0.0.1;Port=$env:DB_PORT;Database=$env:MULTILIDER_IDENTITY_DATABASE;User=$env:MULTILIDER_IDENTITY_USER;Password=$env:MULTILIDER_IDENTITY_PASSWORD"
@@ -203,6 +214,7 @@ try {
         Set-F5 'PHASE5_API_LOCAL' "http://127.0.0.1:$localPort"
     }
     Set-F5 'APP_ARCHITECTURE' 'microservices';Set-F5 'BUSINESS_MICROSERVICES_ENABLED' 'true'
+    if($AcceptanceTests){Set-F5 'LIBELULA_REMOTE_TEST_PAYMENTS_ENABLED' 'true'}
     Set-F5 'IDENTITY_SIGNING_KEY' $key;Set-F5 'IDENTITY_ISSUER' 'phase3-isolated';Set-F5 'IDENTITY_AUDIENCE' 'phase3-isolated'
     Set-F5 'SEGURIDAD_SERVICE_URL' "http://127.0.0.1:$($http.seguridad)";Set-F5 'PROPIEDADES_SERVICE_URL' "http://127.0.0.1:$($http.propiedades)"
     Set-F5 'COMERCIAL_SERVICE_URL' "http://127.0.0.1:$($http.comercial)";Set-F5 'FINANZAS_SERVICE_URL' "http://127.0.0.1:$($http.finanzas)"
@@ -222,6 +234,13 @@ try {
         & php (Join-Path $backend 'tests/Support/PhaseFiveFinanceComplements.php')
         if($LASTEXITCODE -ne 0){throw 'F5 additional finance checks failed.'}
         & (Join-Path $PSScriptRoot 'reservation-acceptance-f5.ps1')
+        & php (Join-Path $backend 'tests/Support/PhaseFiveDocuments.php')
+        if($LASTEXITCODE -ne 0){throw 'F5 document acceptance checks failed.'}
+        & (Join-Path $PSScriptRoot 'attachment-crash-f5.ps1')
+        & (Join-Path $PSScriptRoot 'payment-race-f5.ps1')
+        & php (Join-Path $backend 'tests/Support/PhaseFiveProfiles.php')
+        if($LASTEXITCODE -ne 0){throw 'F5 profile acceptance checks failed.'}
+        & (Join-Path $PSScriptRoot 'metrics-f5.ps1')
     }
     if($RecoveryTests) {
         Set-F5 'PHASE5_API_LOCAL' "http://127.0.0.1:$localPort"
@@ -258,7 +277,24 @@ try {
             Wait-F5 "http://127.0.0.1:$uiPort" 200
         }
         Push-Location $frontend
-        try {& node (Join-Path $frontend 'node_modules\@playwright\test\cli.js') test --config (Join-Path $frontend 'playwright.phase5.config.js');if($LASTEXITCODE -ne 0){throw 'F5 browser tests failed.'}}finally{Pop-Location}
+        try {
+            $playwright=Join-Path $frontend 'node_modules\@playwright\test\cli.js'
+            $browserConfig=Join-Path $frontend 'playwright.phase5.config.js'
+            if($AcceptanceTests){
+                $offline=@('comercial','comercial-second','finanzas','propiedades','seguridad')
+                foreach($name in $offline){Stop-OwnedF5 $started[$name]}
+                Set-F5 'PHASE5_BROWSER_RESULTS' '.phase3/browser-f5-local-results.json'
+                & node $playwright test --config $browserConfig --grep '\b(?:LOCAL|P01):'
+                $localBrowserExit=$LASTEXITCODE
+                foreach($name in @('seguridad','propiedades','finanzas','comercial','comercial-second')){Restart-F5 $name 'browser-online'}
+                Set-F5 'PHASE5_BROWSER_RESULTS' '.phase3/browser-f5-results.json'
+                & node $playwright test --config $browserConfig --grep-invert '\b(?:LOCAL|P01):'
+                if($localBrowserExit -ne 0){throw 'F5 browser tests failed with the four microservices stopped.'}
+            } else {
+                & node $playwright test --config $browserConfig --grep-invert 'no hay contrato ni pago accionable|^P01:'
+            }
+            if($LASTEXITCODE -ne 0){throw 'F5 browser tests failed.'}
+        } finally {Pop-Location}
     }
     if($RestoreTests) {
         $replay=$AcceptanceTests
@@ -315,7 +351,7 @@ try {
             }
         }
         foreach($name in @('f5-private-documents','f5-private-photos')) {
-            $source=Join-Path $runtime $name
+            $source=if($name -eq 'f5-private-documents'){$env:Storage__Path}else{$env:Storage__PhotosPath}
             if(Test-Path -LiteralPath $source) {
                 $dest=Join-Path $backupRoot $name;New-Item -ItemType Directory -Force $dest|Out-Null
                 Get-ChildItem -LiteralPath $source -File|ForEach-Object {

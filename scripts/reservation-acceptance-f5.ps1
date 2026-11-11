@@ -10,6 +10,35 @@ function Invoke-ReservationFixtureSql([string]$role,[string]$query) {
 }
 
 $driver=Join-Path $backend 'tests/Support/PhaseFiveCrash.php'
+$stale=& php $driver prepare sale Reservar before unlogged
+if($LASTEXITCODE -ne 0){throw 'Could not pause before the catalog write.'}
+$stale=$stale|ConvertFrom-Json
+$staleId=[Guid]::ParseExact($stale.id,'D')
+$marker=Join-Path $env:MULTILIDER_F5_BOUNDARY_DIR ($staleId.ToString('N')+'-Reservar-before')
+$certificate=[Security.Cryptography.X509Certificates.X509Certificate2]::new($certs.comercial,$password)
+try {
+    $base="https://127.0.0.1:$($tls.propiedades)/internal/catalogo/v2/operaciones/$staleId"
+    $offer=Invoke-RestMethod "$base/oferta" -SkipCertificateCheck -Certificate $certificate -TimeoutSec 5
+    $data=@{operacion_id=$staleId;command_id=[Guid]::NewGuid();expected_version=$offer.version;
+        precio_esperado=[decimal]$offer.precio_venta+1;moneda_esperada=$offer.moneda}
+    $options=@{Method='Post';SkipCertificateCheck=$true;SkipHttpErrorCheck=$true;Certificate=$certificate;ContentType='application/json';TimeoutSec=5}
+    $wrongPrice=Invoke-WebRequest "$base/reservar" @options -Body ($data|ConvertTo-Json -Compress)
+    $data.precio_esperado=$offer.precio_venta;$data.moneda_esperada=if($offer.moneda -eq 'BOB'){'USD'}else{'BOB'}
+    $wrongCurrency=Invoke-WebRequest "$base/reservar" @options -Body ($data|ConvertTo-Json -Compress)
+    $data.moneda_esperada=$offer.moneda;$data.expected_version='stale'
+    $wrongVersion=Invoke-WebRequest "$base/reservar" @options -Body ($data|ConvertTo-Json -Compress)
+    if([int]$wrongPrice.StatusCode -ne 409 -or [int]$wrongCurrency.StatusCode -ne 409 -or [int]$wrongVersion.StatusCode -ne 412 -or
+        (Invoke-ReservationFixtureSql 'propiedades' "SELECT COUNT(*) FROM dbo.catalog_reservas WHERE OperationId='$staleId';") -ne '0'){
+        throw 'A stale version, price or currency crossed the catalog confirmation gate.'
+    }
+} finally {
+    [IO.File]::WriteAllText($marker+'.release','')
+    $certificate.Dispose()
+}
+& php $driver await-state $stale.id Completada
+if($LASTEXITCODE -ne 0){throw 'Valid offer could not recover after the rejected probes.'}
+Write-Output 'F5-S05: real catalog denied stale price/currency (409) and version (412) without writing any reservation.'
+
 $held=& php $driver prepare sale PrepararFinanzas after unlogged
 if($LASTEXITCODE -ne 0){throw 'Could not pause after finance preparation.'}
 $held=$held|ConvertFrom-Json

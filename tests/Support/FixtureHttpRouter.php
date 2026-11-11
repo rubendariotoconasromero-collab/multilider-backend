@@ -41,4 +41,46 @@ if (str_starts_with($uri, '/storage/')) {
 
     return;
 }
+if (getenv('APP_ARCHITECTURE') === 'local'
+    && preg_match('~^/api/public/pagos/(procesar|callback|confirmar-retorno|estado/[^/]+|verificar/[^/]+)$~D', $uri)
+    && ($boundary = realpath(getenv('MULTILIDER_F5_BOUNDARY_DIR') ?: '.'))
+    && dirname($boundary) === realpath(__DIR__.'/../../storage/framework/testing')
+    && preg_match('/^f5-boundary-[a-f0-9]{32}$/D', basename($boundary))) {
+    require __DIR__.'/../../vendor/autoload.php';
+    $app = require __DIR__.'/../../bootstrap/app.php';
+    $kernel = $app->make(\Illuminate\Contracts\Http\Kernel::class);
+    $kernel->bootstrap();
+    \Illuminate\Support\Facades\Http::preventStrayRequests();
+    \Illuminate\Support\Facades\Http::fake([
+        'payments.example.test/rest/deuda/registrar' => \Illuminate\Support\Facades\Http::response([
+            'error' => 0, 'id_transaccion' => 'fixture', 'url_pasarela_pagos' => 'https://payments.example.test/checkout',
+        ]),
+        'payments.example.test/rest/deuda/consultar_deudas/por_fechas' => function () use ($boundary) {
+            $reference = request()->input('identificador') ?? request()->input('id_transaccion') ?? basename(request()->path());
+            $rows = [];
+            if (preg_match('/^TEMP-([a-f0-9-]{36})$/D', $reference, $matches)) {
+                $id = str_replace('-', '', $matches[1]);
+                $marker = "$boundary/$id-Callback-after";
+                if (is_file($marker.'.arm')) {
+                    rename($marker.'.arm', $marker.'.claimed');
+                    file_put_contents($marker.'.hit', getmypid());
+                    $deadline = microtime(true) + 15;
+                    while (! is_file($marker.'.release') && microtime(true) < $deadline) {
+                        clearstatcache();
+                        usleep(20000);
+                    }
+                }
+                $rows[] = ['identificador' => $reference, 'pagado' => is_file("$boundary/$id-provider-paid"),
+                    'valor_total' => '0.20', 'moneda' => 'BOB'];
+            }
+
+            return \Illuminate\Support\Facades\Http::response(['error' => 0, 'datos' => $rows]);
+        },
+    ]);
+    $request = \Illuminate\Http\Request::capture();
+    $app->instance('request', $request);
+    $response = $kernel->handle($request)->send();
+    $kernel->terminate($request, $response);
+    return;
+}
 require __DIR__.'/../../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php';

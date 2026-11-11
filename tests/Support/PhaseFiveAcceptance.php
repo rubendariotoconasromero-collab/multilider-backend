@@ -9,7 +9,7 @@ use Psr\Http\Message\ResponseInterface;
 define('F5_HTTP_HELPERS_ONLY', true);
 require __DIR__.'/PhaseFiveIntegrationSmoke.php';
 
-function endpointF5(string $name): Client
+function endpointF5(string $name, ?CurlMultiHandler $handler = null): Client
 {
     global $transport;
     $url = getenv($name);
@@ -17,7 +17,7 @@ function endpointF5(string $name): Client
         throw new RuntimeException('Only loopback test listeners are allowed.');
     }
 
-    return new Client(['base_uri' => $url, 'handler' => HandlerStack::create($transport),
+    return new Client(['base_uri' => $url, 'handler' => HandlerStack::create($handler ?? $transport),
         'http_errors' => false, 'allow_redirects' => false, 'timeout' => 20]);
 }
 
