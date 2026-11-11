@@ -1,4 +1,4 @@
-param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[switch]$RotationTests,[switch]$CrashTests,[switch]$AggregateTests,[string]$MySqlBin)
+param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[switch]$RotationTests,[switch]$CrashTests,[switch]$AggregateTests,[switch]$MigrationTests,[string]$MigrationSource,[switch]$ApplyMigrationSource,[string]$MySqlBin)
 $ErrorActionPreference='Stop'
 if($env:MULTILIDER_TEST_ISOLATED -ne '1' -or $env:DB_DATABASE -ne 'multilider_tests_isolated' -or $env:DB_PORT -eq '3306'){throw 'Run test-isolated.ps1 -Integration -Phase5.'}
 $backend=Split-Path $PSScriptRoot -Parent
@@ -117,17 +117,44 @@ try {
     Set-F5 'CORS_ALLOWED_ORIGINS' "http://127.0.0.1:$uiLocalPort,http://127.0.0.1:$uiRemotePort,http://127.0.0.1:$uiDirectPort"
     Set-F5 'Storage__Path' $(if($AcceptanceTests -or $CrashTests){Join-Path $boundaryDir 'documents'}else{Join-Path $runtime 'f5-private-documents'})
     Set-F5 'Storage__PhotosPath' (Join-Path $runtime 'f5-private-photos')
+    if($MigrationTests){
+        if($ApplyMigrationSource){
+            $f7Root=(Resolve-Path -LiteralPath $MigrationSource).Path
+            if((Split-Path -Parent $f7Root) -ne (Resolve-Path -LiteralPath $runtime).Path -or (Split-Path -Leaf $f7Root) -notmatch '^f7-[a-f0-9]{32}$'){
+                throw 'F7 real copy is outside the private test directory.'
+            }
+        } else {
+            $f7Root=Join-Path $runtime ('f7-'+[Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $f7Root | Out-Null
+        }
+        Set-F5 'MULTILIDER_F7_ROOT' $f7Root
+        Set-F5 'Operations__Dataset' $(if($ApplyMigrationSource){'multilider-local'}else{'isolated-f7'})
+        Set-F5 'Storage__Path' (Join-Path $f7Root 'documents')
+        Set-F5 'Storage__PhotosPath' (Join-Path $f7Root 'photos')
+        Set-F5 'Catalog__StorageRoot' (Join-Path $f7Root 'catalog')
+        Set-F5 'IDENTITY_ISSUER' 'phase3-isolated'
+    }
     Set-F5 'Services__Seguridad'  "http://127.0.0.1:$($http.seguridad)"
     Set-F5 'ConnectionStrings__MySQL' "Server=127.0.0.1;Port=$env:DB_PORT;Database=$env:MULTILIDER_IDENTITY_DATABASE;User=$env:MULTILIDER_IDENTITY_USER;Password=$env:MULTILIDER_IDENTITY_PASSWORD"
     Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-initial-config.php';Set-F5 'APP_ARCHITECTURE' 'local'
     Set-F5 'LARAVEL_STORAGE_PATH' (Join-Path $runtime 'app')
-    & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') prepare
-    if($LASTEXITCODE -ne 0){throw 'Local/identity fixtures failed.'}
-    & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') phase5
-    if($LASTEXITCODE -ne 0){throw 'F5 permissions fixture failed.'}
+    if($ApplyMigrationSource){
+        & (Join-Path $PSScriptRoot 'restore-source-f7.ps1')
+    } else {
+        & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') prepare
+        if($LASTEXITCODE -ne 0){throw 'Local/identity fixtures failed.'}
+        & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') phase5
+        if($LASTEXITCODE -ne 0){throw 'F5 permissions fixture failed.'}
+        if($AggregateTests -or $MigrationTests){
+            & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') phase6
+            if($LASTEXITCODE -ne 0){throw 'F6 fixture failed.'}
+        }
+        if($MigrationTests){
+            & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') phase7
+            if($LASTEXITCODE -ne 0){throw 'F7 source fixture failed.'}
+        }
+    }
     if($AggregateTests){
-        & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') phase6
-        if($LASTEXITCODE -ne 0){throw 'F6 fixture failed.'}
         $reportsDir=Join-Path $runtime ('f6-reports-'+[Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $reportsDir | Out-Null
         Set-F5 'MULTILIDER_F6_REPORTS_DIR' $reportsDir
@@ -145,12 +172,29 @@ try {
         Set-F5 'ConnectionStrings__SqlServer' $connections[$role]
         $name=@{propiedades='MULTILIDER_PROPERTIES_TEST_CONNECTION';comercial='MULTILIDER_COMERCIAL_TEST_CONNECTION';finanzas='MULTILIDER_FINANZAS_TEST_CONNECTION'}[$role]
         Set-F5 $name $connections[$role]
-        $fixtureArgs=if($AcceptanceTests -and $role -in @('comercial','finanzas')){@('--','upgrade-f4')}else{@()}
+        $fixtureArgs=if($MigrationTests){@('--','schema-only')}elseif($AcceptanceTests -and $role -in @('comercial','finanzas')){@('--','upgrade-f4')}else{@()}
         & dotnet run --project (Join-Path (Join-Path $workspace $folders[$role]) 'tests\FixtureSetup\FixtureSetup.csproj') @fixtureArgs
         if($LASTEXITCODE -ne 0){throw "SQL fixture failed: $role"}
     }
+    if($MigrationTests){
+        $migration=Join-Path $backend 'scripts\migrate-data.php'
+        if($ApplyMigrationSource){
+            . (Join-Path $PSScriptRoot 'restore-targets-f7.ps1')
+            Set-F5 'MULTILIDER_F7_REAL_COPY' '1'
+            Set-F5 'ConnectionStrings__MySQL' "Server=127.0.0.1;Port=$env:DB_PORT;Database=$env:MULTILIDER_IDENTITY_DATABASE;User=$env:MULTILIDER_IDENTITY_USER;Password=$env:MULTILIDER_IDENTITY_PASSWORD"
+        } else {
+            if($MigrationSource){
+                Set-F5 'MULTILIDER_F7_ROOT' $MigrationSource
+                & php $migration plan multilider-local origen
+                if($LASTEXITCODE -notin @(0,2)){throw 'F7 local-copy preflight could not run.'}
+                Set-F5 'MULTILIDER_F7_ROOT' $f7Root
+            }
+            & (Join-Path $PSScriptRoot 'migration-acceptance-f7.ps1')
+        }
+    }
+    $launchConnections=if($ApplyMigrationSource){$restoreSql}else{$connections}
     foreach($role in $roles){
-        Set-F5Role $role
+        Set-F5Role $role $launchConnections
         $folder=Join-Path $workspace $folders[$role];$framework=if($role -eq 'seguridad'){'net8.0'}else{'net10.0'}
         $executable=if($role -eq 'seguridad'){$securityRuntime}else{$dotnet}
         $launch=@((Join-Path $folder "bin\Debug\$framework\$($dlls[$role]).dll"),'--urls',"http://127.0.0.1:$($http[$role]);https://127.0.0.1:$($tls[$role])")
@@ -159,7 +203,7 @@ try {
         $launches[$role]=@{file=$executable;args=$launch;folder=$folder;probe="http://127.0.0.1:$($http[$role])/api/$probe"}
         Wait-F5 $launches[$role].probe 401
     }
-    Set-F5Role 'comercial-second'
+    Set-F5Role 'comercial-second' $launchConnections
     $launches['comercial-second']=@{file=$dotnet;args=@((Join-Path $workspace 'multilider-ms-comercial\bin\Debug\net10.0\MSMultilider.Comercial.dll'),'--urls',"http://127.0.0.1:$secondCommercialPort");folder=(Join-Path $workspace 'multilider-ms-comercial');probe="http://127.0.0.1:$secondCommercialPort/api/ventas"}
     $second=$launches['comercial-second'];$started['comercial-second']=Start-F5 'f5-comercial-second' $second.file $second.args $second.folder
     Wait-F5 $second.probe 401
@@ -206,7 +250,7 @@ try {
         }
     } finally {$knownCert.Dispose()}
     Write-Output 'F5 mTLS negative checks: missing certificate, wrong scope and missing grant rejected.'
-    if($BrowserTests -or $RecoveryTests -or $AcceptanceTests -or $RotationTests -or $CrashTests -or $AggregateTests) {
+    if($BrowserTests -or $RecoveryTests -or $AcceptanceTests -or $RotationTests -or $CrashTests -or $AggregateTests -or $MigrationTests) {
         Set-F5 'APP_ARCHITECTURE' 'local';Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-local-config.php'
         & php (Join-Path $backend 'tests/Support/CacheFixture.php')
         if($LASTEXITCODE -ne 0){throw 'Local config cache failed.'}
@@ -223,6 +267,7 @@ try {
     }
     Set-F5 'APP_ARCHITECTURE' 'microservices';Set-F5 'BUSINESS_MICROSERVICES_ENABLED' 'true'
     if($AggregateTests){Set-F5 'AGGREGATE_MICROSERVICES_ENABLED' 'true';Set-F5 'AGGREGATE_DATASET' 'isolated-f6'}
+    if($MigrationTests){Set-F5 'AGGREGATE_MICROSERVICES_ENABLED' 'true';Set-F5 'AGGREGATE_DATASET' $env:Operations__Dataset}
     if($AcceptanceTests){Set-F5 'LIBELULA_REMOTE_TEST_PAYMENTS_ENABLED' 'true'}
     Set-F5 'IDENTITY_SIGNING_KEY' $key;Set-F5 'IDENTITY_ISSUER' 'phase3-isolated';Set-F5 'IDENTITY_AUDIENCE' 'phase3-isolated'
     Set-F5 'SEGURIDAD_SERVICE_URL' "http://127.0.0.1:$($http.seguridad)";Set-F5 'PROPIEDADES_SERVICE_URL' "http://127.0.0.1:$($http.propiedades)"
@@ -234,6 +279,41 @@ try {
     $laravel=$launches.laravel;$started.laravel=Start-F5 'f5-laravel' $laravel.file $laravel.args $laravel.folder
     Wait-F5 $laravel.probe 401
     Set-F5 'PHASE5_API' "http://127.0.0.1:$backendPort";Set-F5 'PHASE5_FINANCE' "http://127.0.0.1:$($http.finanzas)";Set-F5 'PHASE5_COMMERCIAL' "http://127.0.0.1:$($http.comercial)"
+    if($MigrationTests){
+        $exercise=Join-Path $backend 'tests\Support\PhaseSevenAcceptance.php'
+        if($ApplyMigrationSource){
+            & php $exercise real-public
+            if($LASTEXITCODE -ne 0){throw 'F7 real-copy public reconciliation failed.'}
+            foreach($name in @('seguridad','propiedades','finanzas','comercial','comercial-second')){Stop-OwnedF5 $started[$name]}
+            & php $exercise real-local-only
+            if($LASTEXITCODE -ne 0){throw 'F7 real-copy autonomous check failed.'}
+            return
+        }
+        & php $exercise
+        if($LASTEXITCODE -ne 0){throw 'F7 HTTP acceptance failed.'}
+        $frontend=Join-Path $workspace 'frontend'
+        $vite=Join-Path $frontend 'node_modules\vite\bin\vite.js'
+        $artifact=Join-Path $frontend '.phase3\dist-f7'
+        Set-F5 'PLAYWRIGHT_BROWSERS_PATH' (Join-Path $frontend '.phase3\browsers')
+        Set-F5 'PHASE6_FRONTEND' "http://127.0.0.1:$uiRemotePort"
+        Push-Location $frontend
+        try {
+            & node $vite build --outDir $artifact --emptyOutDir --logLevel warn
+            if($LASTEXITCODE -ne 0){throw 'F7 frontend build failed.'}
+        } finally {Pop-Location}
+        $null=Start-F5 'f7-frontend' (Get-Command node).Source @($vite,'preview','--host','127.0.0.1','--port',"$uiRemotePort",'--strictPort','--outDir',$artifact) $frontend
+        Wait-F5 $env:PHASE6_FRONTEND 200
+        $browserExercise=Join-Path $frontend 'tests\e2e\fase6.mjs'
+        & node $browserExercise remote
+        if($LASTEXITCODE -ne 0){throw 'F7 remote frontend check failed.'}
+        foreach($name in @('seguridad','propiedades','finanzas','comercial','comercial-second')){Stop-OwnedF5 $started[$name]}
+        & php $exercise local-only
+        if($LASTEXITCODE -ne 0){throw 'F7 autonomous Laravel check failed.'}
+        & node $browserExercise local
+        if($LASTEXITCODE -ne 0){throw 'F7 local frontend check failed.'}
+        Write-Output "F7 private evidence directory: $f7Root"
+        return
+    }
     & php (Join-Path $backend 'tests\Support\PhaseFiveIntegrationSmoke.php')
     if($LASTEXITCODE -ne 0){throw 'F5 integration failed; inspect private service logs.'}
     if($AggregateTests) {

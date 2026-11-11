@@ -19,7 +19,7 @@ if (getenv('MULTILIDER_TEST_ISOLATED') !== '1' || ! IsolatedDatabaseGuard::allow
 if (is_file($path)) {
     unlink($path);
 }
-$storage = $root.DIRECTORY_SEPARATOR.'app';
+$storage = IsolatedDatabaseGuard::phaseSevenStorage() ?? $root.DIRECTORY_SEPARATOR.'app';
 if (IsolatedDatabaseGuard::allowedName((string) getenv('MULTILIDER_F5_RESTORED_MYSQL')) && getenv('DB_DATABASE') === getenv('MULTILIDER_F5_RESTORED_MYSQL')) {
     $storage = getenv('MULTILIDER_F5_RESTORED_STORAGE');
     if (! $storage || dirname(dirname($storage)) !== $root || ! preg_match('/^f5-restore-[a-f0-9]{32}$/D', basename(dirname($storage)))) {

@@ -116,6 +116,18 @@ if ($action === 'prepare') {
         ['mi_empresa_id' => $company, 'nombre' => 'Caja USD', 'tipo' => 'EFECTIVO'],
     ]);
     echo "F5 role and permission fixtures prepared.\n";
+} elseif ($action === 'phase7-real') {
+    $pdo = identityDb();
+    foreach (['users', 'roles', 'permisos', 'rol_permiso', 'rol_permiso_usuario'] as $table) {
+        $definition = (array) DB::selectOne('SHOW CREATE TABLE `'.$table.'`');
+        $pdo->exec(preg_replace('/ AUTO_INCREMENT=\d+/', '', array_values($definition)[1]));
+    }
+    if (Artisan::call('migrate', ['--force' => true]) !== 0) {
+        throw new RuntimeException('No se pudo actualizar la copia local al esquema de Laravel.');
+    }
+    echo "F7 real copy prepared for Laravel and the independent identity database.\n";
+} elseif (in_array($action, ['phase7', 'phase7-delta'], true)) {
+    require __DIR__.'/PhaseSevenFixture.php';
 } elseif ($action === 'verify-migration') {
     $pdo = identityDb();
     $user = $pdo->query('SELECT * FROM users WHERE id=1')->fetch(PDO::FETCH_ASSOC);

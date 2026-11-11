@@ -13,6 +13,22 @@ final class IsolatedDatabaseGuard
                 && preg_match('/^multilider_f5_restore_[a-f0-9]{32}$/D', $name));
     }
 
+    public static function phaseSevenStorage(): ?string
+    {
+        if (getenv('MULTILIDER_F7_REAL_COPY') !== '1') {
+            return null;
+        }
+        $root = realpath(getenv('MULTILIDER_F7_ROOT') ?: '.');
+        $expected = realpath(__DIR__.'/../../storage/framework/testing');
+        if ($root === false || dirname($root) !== $expected || ! preg_match('/^f7-[a-f0-9]{32}$/D', basename($root))
+            || realpath($root.DIRECTORY_SEPARATOR.'laravel') !== $root.DIRECTORY_SEPARATOR.'laravel'
+            || getenv('MULTILIDER_TEST_ISOLATED') !== '1') {
+            throw new \RuntimeException('Invalid Phase 7 storage fixture.');
+        }
+
+        return $root.DIRECTORY_SEPARATOR.'laravel';
+    }
+
     public static function check(Application $app): void
     {
         $db = $app['config']->get('database.connections.mysql');

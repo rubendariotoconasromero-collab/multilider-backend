@@ -11,7 +11,7 @@ if (getenv('MULTILIDER_TEST_ISOLATED') !== '1' || ! IsolatedDatabaseGuard::allow
 
     return;
 }
-$storage = realpath(__DIR__.'/../../storage/framework/testing/app');
+$storage = IsolatedDatabaseGuard::phaseSevenStorage() ?? realpath(__DIR__.'/../../storage/framework/testing/app');
 if (getenv('DB_DATABASE') === getenv('MULTILIDER_F5_RESTORED_MYSQL')) {
     $storage = realpath(getenv('MULTILIDER_F5_RESTORED_STORAGE'));
     $fixtureRoot = realpath(__DIR__.'/../../storage/framework/testing');

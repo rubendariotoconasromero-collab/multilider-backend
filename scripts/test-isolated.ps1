@@ -5,6 +5,9 @@ param(
     [switch]$IntegrationOnly,
     [switch]$Phase5,
     [switch]$AggregateTests,
+    [switch]$MigrationTests,
+    [string]$MigrationSource,
+    [switch]$ApplyMigrationSource,
     [switch]$RecoveryTests,
     [switch]$RestoreTests,
     [switch]$AcceptanceTests,
@@ -15,6 +18,10 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($IntegrationOnly -and !$Integration) { throw '-IntegrationOnly requiere -Integration.' }
 if ($AggregateTests -and (!$Integration -or !$Phase5)) { throw '-AggregateTests requiere -Integration -Phase5.' }
+if ($MigrationTests -and (!$Integration -or !$Phase5 -or $AggregateTests -or $AcceptanceTests -or $RestoreTests -or $BrowserTests -or $RecoveryTests -or $RotationTests -or $CrashTests)) {
+    throw '-MigrationTests requiere -Integration -Phase5 en una ejecución exclusiva.'
+}
+if ($ApplyMigrationSource -and (!$MigrationTests -or !$MigrationSource)) { throw '-ApplyMigrationSource requiere una copia privada y -MigrationTests.' }
 if ($AcceptanceTests -and (!$Integration -or !$Phase5)) { throw '-AcceptanceTests requiere -Integration -Phase5.' }
 if (($RotationTests -or $CrashTests) -and (!$Integration -or !$Phase5)) { throw '-RotationTests y -CrashTests requieren -Integration -Phase5.' }
 $project = Split-Path $PSScriptRoot -Parent
@@ -74,7 +81,7 @@ try {
             $result = $LASTEXITCODE
         }
         if ($result -eq 0 -and $Integration) {
-            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -AcceptanceTests:$AcceptanceTests -RotationTests:$RotationTests -CrashTests:$CrashTests -AggregateTests:$AggregateTests -MySqlBin $MySqlBin }
+            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -AcceptanceTests:$AcceptanceTests -RotationTests:$RotationTests -CrashTests:$CrashTests -AggregateTests:$AggregateTests -MigrationTests:$MigrationTests -MigrationSource $MigrationSource -ApplyMigrationSource:$ApplyMigrationSource -MySqlBin $MySqlBin }
             else { & (Join-Path $PSScriptRoot 'integration-f3.ps1') -BrowserTests:$BrowserTests }
             $result = $LASTEXITCODE
         }
