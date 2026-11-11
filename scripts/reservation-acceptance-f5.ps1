@@ -45,6 +45,12 @@ $held=$held|ConvertFrom-Json
 $heldId=[Guid]::ParseExact($held.id,'D')
 $marker=Join-Path $env:MULTILIDER_F5_BOUNDARY_DIR ($heldId.ToString('N')+'-PrepararFinanzas-after')
 try {
+    if ($AggregateTests) {
+        $propertyId=Invoke-ReservationFixtureSql 'propiedades' "SELECT PropiedadId FROM dbo.catalog_reservas WHERE OperationId='$heldId' AND Estado='Retenida';"
+        if($propertyId -notmatch '^[1-9][0-9]*$'){throw 'F6 reservation fixture property is missing.'}
+        & php (Join-Path $backend 'tests\Support\PhaseSixAcceptance.php') reservation $propertyId
+        if($LASTEXITCODE -ne 0){throw 'F6 inventory did not reflect the live reservation.'}
+    }
     # Only advance this synthetic reservation's clock. The real catalogue
     # expiration, grant and compensation run unchanged.
     $null=Invoke-ReservationFixtureSql 'propiedades' "UPDATE dbo.catalog_reservas SET ExpiresAt=DATEADD(second,-1,SYSUTCDATETIME()) WHERE OperationId='$heldId' AND Estado='Retenida'; IF @@ROWCOUNT<>1 THROW 51000,'Expected one held reservation',1;"

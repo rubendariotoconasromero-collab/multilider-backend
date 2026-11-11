@@ -1,4 +1,4 @@
-param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[switch]$RotationTests,[switch]$CrashTests,[string]$MySqlBin)
+param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[switch]$RotationTests,[switch]$CrashTests,[switch]$AggregateTests,[string]$MySqlBin)
 $ErrorActionPreference='Stop'
 if($env:MULTILIDER_TEST_ISOLATED -ne '1' -or $env:DB_DATABASE -ne 'multilider_tests_isolated' -or $env:DB_PORT -eq '3306'){throw 'Run test-isolated.ps1 -Integration -Phase5.'}
 $backend=Split-Path $PSScriptRoot -Parent
@@ -125,6 +125,14 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Local/identity fixtures failed.'}
     & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') phase5
     if($LASTEXITCODE -ne 0){throw 'F5 permissions fixture failed.'}
+    if($AggregateTests){
+        & php (Join-Path $backend 'tests\Support\IntegrationFixture.php') phase6
+        if($LASTEXITCODE -ne 0){throw 'F6 fixture failed.'}
+        $reportsDir=Join-Path $runtime ('f6-reports-'+[Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $reportsDir | Out-Null
+        Set-F5 'MULTILIDER_F6_REPORTS_DIR' $reportsDir
+        if($AcceptanceTests){Set-F5 'MULTILIDER_F6_UPGRADE_FIXTURE' '1'}
+    }
     foreach($role in $roles){
         $folder=Join-Path $workspace $folders[$role]
         & dotnet build (Join-Path $folder "$($dlls[$role]).csproj") --no-restore -v q
@@ -198,7 +206,7 @@ try {
         }
     } finally {$knownCert.Dispose()}
     Write-Output 'F5 mTLS negative checks: missing certificate, wrong scope and missing grant rejected.'
-    if($BrowserTests -or $RecoveryTests -or $AcceptanceTests -or $RotationTests -or $CrashTests) {
+    if($BrowserTests -or $RecoveryTests -or $AcceptanceTests -or $RotationTests -or $CrashTests -or $AggregateTests) {
         Set-F5 'APP_ARCHITECTURE' 'local';Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-local-config.php'
         & php (Join-Path $backend 'tests/Support/CacheFixture.php')
         if($LASTEXITCODE -ne 0){throw 'Local config cache failed.'}
@@ -214,6 +222,7 @@ try {
         Set-F5 'PHASE5_API_LOCAL' "http://127.0.0.1:$localPort"
     }
     Set-F5 'APP_ARCHITECTURE' 'microservices';Set-F5 'BUSINESS_MICROSERVICES_ENABLED' 'true'
+    if($AggregateTests){Set-F5 'AGGREGATE_MICROSERVICES_ENABLED' 'true';Set-F5 'AGGREGATE_DATASET' 'isolated-f6'}
     if($AcceptanceTests){Set-F5 'LIBELULA_REMOTE_TEST_PAYMENTS_ENABLED' 'true'}
     Set-F5 'IDENTITY_SIGNING_KEY' $key;Set-F5 'IDENTITY_ISSUER' 'phase3-isolated';Set-F5 'IDENTITY_AUDIENCE' 'phase3-isolated'
     Set-F5 'SEGURIDAD_SERVICE_URL' "http://127.0.0.1:$($http.seguridad)";Set-F5 'PROPIEDADES_SERVICE_URL' "http://127.0.0.1:$($http.propiedades)"
@@ -227,6 +236,94 @@ try {
     Set-F5 'PHASE5_API' "http://127.0.0.1:$backendPort";Set-F5 'PHASE5_FINANCE' "http://127.0.0.1:$($http.finanzas)";Set-F5 'PHASE5_COMMERCIAL' "http://127.0.0.1:$($http.comercial)"
     & php (Join-Path $backend 'tests\Support\PhaseFiveIntegrationSmoke.php')
     if($LASTEXITCODE -ne 0){throw 'F5 integration failed; inspect private service logs.'}
+    if($AggregateTests) {
+        $exercise=Join-Path $backend 'tests\Support\PhaseSixAcceptance.php'
+        & php $exercise
+        if($LASTEXITCODE -ne 0){throw 'F6 acceptance failed.'}
+        & python (Join-Path $backend 'tests\Support\PhaseSixPdf.py') $reportsDir
+        if($LASTEXITCODE -ne 0){throw 'F6 PDF reconciliation failed.'}
+        $frontend=Join-Path $workspace 'frontend'
+        $vite=Join-Path $frontend 'node_modules\vite\bin\vite.js'
+        $artifact=Join-Path $frontend '.phase3\dist-f6'
+        Set-F5 'PLAYWRIGHT_BROWSERS_PATH' (Join-Path $frontend '.phase3\browsers')
+        Set-F5 'PHASE6_FRONTEND' "http://127.0.0.1:$uiRemotePort"
+        Push-Location $frontend
+        try {
+            & node $vite build --outDir $artifact --emptyOutDir --logLevel warn
+            if($LASTEXITCODE -ne 0){throw 'F6 frontend build failed.'}
+        } finally {Pop-Location}
+        $f6Frontend=Start-F5 'f6-frontend' (Get-Command node).Source @($vite,'preview','--host','127.0.0.1','--port',"$uiRemotePort",'--strictPort','--outDir',$artifact) $frontend
+        Wait-F5 $env:PHASE6_FRONTEND 200
+        $browserExercise=Join-Path $frontend 'tests\e2e\fase6.mjs'
+        & node $browserExercise remote
+        if($LASTEXITCODE -ne 0){throw 'F6 remote browser check failed.'}
+        $rollbackPort=Port-F5
+        Set-F5 'AGGREGATE_MICROSERVICES_ENABLED' 'false'
+        Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f6-rollback-config.php'
+        & php (Join-Path $backend 'tests/Support/CacheFixture.php')
+        if($LASTEXITCODE -ne 0){throw 'F6 rollback cache failed.'}
+        $rollback=Start-F5 'f6-rollback' (Get-Command php).Source @('-S',"127.0.0.1:$rollbackPort",'-t','.',(Join-Path $backend 'tests/Support/FixtureHttpRouter.php')) (Join-Path $backend 'public')
+        Wait-F5 "http://127.0.0.1:$rollbackPort/api/me" 401
+        Set-F5 'PHASE5_API' "http://127.0.0.1:$rollbackPort"
+        & php $exercise 'rollback'
+        if($LASTEXITCODE -ne 0){throw 'F6 rollback flag check failed.'}
+        $rollbackWorkspace=Join-Path $frontend ('.phase3\rollback-f6-'+[Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $rollbackWorkspace | Out-Null
+        $archive=Join-Path $rollbackWorkspace 'f5.zip'
+        $legacySource=Join-Path $rollbackWorkspace 'source'
+        $legacyArtifact=Join-Path $rollbackWorkspace 'dist'
+        & git -C $frontend archive --format=zip "--output=$archive" b78e2e7
+        if($LASTEXITCODE -ne 0){throw 'F5 reference frontend revision is missing.'}
+        Expand-Archive -LiteralPath $archive -DestinationPath $legacySource
+        Set-F5 'VITE_API_URL' $env:PHASE5_API
+        Push-Location $legacySource
+        try {
+            & node $vite build --outDir $legacyArtifact --emptyOutDir --logLevel warn
+            if($LASTEXITCODE -ne 0){throw 'F5 reference build failed.'}
+        } finally {Pop-Location}
+        Set-F5 'PHASE6_FRONTEND' "http://127.0.0.1:$uiLocalPort"
+        $oldFrontend=Start-F5 'f6-reference-frontend' (Get-Command node).Source @($vite,'preview','--host','127.0.0.1','--port',"$uiLocalPort",'--strictPort','--outDir',$legacyArtifact) $legacySource
+        Wait-F5 $env:PHASE6_FRONTEND 200
+        & node $browserExercise rollback
+        if($LASTEXITCODE -ne 0){throw 'F6 reference frontend rollback failed.'}
+        Stop-OwnedF5 $oldFrontend
+        Set-F5 'PHASE6_FRONTEND' "http://127.0.0.1:$uiRemotePort"
+        Stop-OwnedF5 $rollback
+        Set-F5 'AGGREGATE_MICROSERVICES_ENABLED' 'true'
+        Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-remote-config.php'
+        Set-F5 'PHASE5_API' "http://127.0.0.1:$backendPort"
+        $queueExercise=Join-Path $backend 'tests\Support\PhaseSixQueue.php'
+        & php $queueExercise seed
+        if($LASTEXITCODE -ne 0){throw 'F6 queue fixture failed.'}
+        Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-local-config.php'
+        & php (Join-Path $backend 'artisan') queue:work database --queue=correos --once --tries=1 --quiet
+        if($LASTEXITCODE -ne 0){throw 'F6 foreign worker probe failed.'}
+        Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-remote-config.php'
+        foreach($step in @('check-foreign','enqueue-replay')){
+            & php $queueExercise $step
+            if($LASTEXITCODE -ne 0){throw "F6 queue state failed: $step"}
+            & php (Join-Path $backend 'artisan') queue:work database --queue=correos --once --tries=1 --quiet
+            if($LASTEXITCODE -ne 0){throw "F6 worker failed: $step"}
+        }
+        & php $queueExercise 'check-replay'
+        if($LASTEXITCODE -ne 0){throw 'F6 worker replay check failed.'}
+        foreach($target in @('finanzas','propiedades','comercial','seguridad')){
+            $stopped=@($target);if($target -eq 'comercial'){$stopped+=@('comercial-second')}
+            foreach($name in $stopped){Stop-OwnedF5 $started[$name]}
+            & php $exercise $target
+            if($LASTEXITCODE -ne 0){throw "F6 outage check failed: $target"}
+            foreach($name in $stopped){Restart-F5 $name 'f6-restarted'}
+        }
+        foreach($name in @('seguridad','propiedades','finanzas','comercial','comercial-second')){Stop-OwnedF5 $started[$name]}
+        & php $exercise 'local-only'
+        if($LASTEXITCODE -ne 0){throw 'F6 local-only checks failed.'}
+        & node $browserExercise local
+        if($LASTEXITCODE -ne 0){throw 'F6 local browser check failed.'}
+        Stop-OwnedF5 $f6Frontend
+        if($AcceptanceTests -or $RecoveryTests -or $BrowserTests -or $RotationTests -or $CrashTests -or $RestoreTests){
+            foreach($name in @('seguridad','propiedades','finanzas','comercial','comercial-second')){Restart-F5 $name 'f6-all-restarted'}
+        }
+    }
     if($AcceptanceTests) {
         Set-F5 'PHASE5_SECURITY' "http://127.0.0.1:$($http.seguridad)"
         & php (Join-Path $backend 'tests/Support/PhaseFiveAcceptance.php')

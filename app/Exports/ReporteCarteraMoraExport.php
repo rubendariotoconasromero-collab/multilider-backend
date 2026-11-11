@@ -26,6 +26,7 @@ class ReporteCarteraMoraExport implements FromArray, WithHeadings, WithStyles, W
 
     public function headings(): array
     {
+        $currency = ($this->kpis['moneda'] ?? 'BOB') === 'USD' ? 'USD' : 'Bs.';
         return [
             'Cliente',
             'Asesor',
@@ -33,13 +34,14 @@ class ReporteCarteraMoraExport implements FromArray, WithHeadings, WithStyles, W
             'Fecha Vencimiento',
             'Días de Mora',
             'Tramo',
-            'Monto Cuota (Bs.)',
-            'Saldo Capital (Bs.)',
+            "Monto Cuota ($currency)",
+            "Saldo Capital ($currency)",
         ];
     }
 
     public function array(): array
     {
+        $currency = ($this->kpis['moneda'] ?? 'BOB') === 'USD' ? 'USD' : 'Bs.';
         $data = [];
 
         $data[] = ['Corte al:', $this->fechaCorte, '', '', '', '', '', ''];
@@ -47,18 +49,18 @@ class ReporteCarteraMoraExport implements FromArray, WithHeadings, WithStyles, W
 
         // KPIs
         $data[] = ['RESUMEN CARTERA', '', '', '', '', '', '', ''];
-        $data[] = ['Cartera Total Activa (Bs.)', number_format($this->kpis['cartera_total'], 2), '', '', 'Clientes en Mora', $this->kpis['clientes_en_mora'], '', ''];
-        $data[] = ['Monto Total Vencido (Bs.)', number_format($this->kpis['monto_vencido'], 2), '', '', 'Cuotas Vencidas', $this->kpis['cuotas_vencidas_count'], '', ''];
+        $data[] = ["Cartera Total Activa ($currency)", number_format($this->kpis['cartera_total'], 2), '', '', 'Clientes en Mora', $this->kpis['clientes_en_mora'], '', ''];
+        $data[] = ["Monto Total Vencido ($currency)", number_format($this->kpis['monto_vencido'], 2), '', '', 'Cuotas Vencidas', $this->kpis['cuotas_vencidas_count'], '', ''];
         $data[] = ['', '', '', '', '', '', '', ''];
 
         // Tabla aging
         $data[] = ['ANÁLISIS DE MORA (AGING)', '', '', '', '', '', '', ''];
-        $data[] = ['Tramo', '', 'Cuotas', '', 'Monto (Bs.)', '', '% del Total', ''];
+        $data[] = ['Tramo', '', 'Cuotas', '', "Monto ($currency)", '', '% del Total', ''];
 
         $totalMonto = array_sum(array_column($this->aging, 'monto'));
-        foreach ($this->aging as $tramo => $d) {
+        foreach ($this->aging as $d) {
             $pct = $totalMonto > 0 ? round($d['monto'] / $totalMonto * 100, 1) : 0;
-            $data[] = [$tramo, '', $d['count'], '', number_format($d['monto'], 2), '', $pct . '%', ''];
+            $data[] = [$d['label'], '', $d['count'], '', number_format($d['monto'], 2), '', $pct . '%', ''];
         }
 
         $data[] = ['', '', '', '', '', '', '', ''];

@@ -26,29 +26,31 @@ class ReporteDesempenoAsesoresExport implements FromArray, WithHeadings, WithSty
 
     public function headings(): array
     {
+        $currency = ($this->kpis['moneda'] ?? 'BOB') === 'USD' ? 'USD' : 'Bs.';
         return [
             'Pos.',
             'Asesor',
             'Ventas (#)',
-            'Monto Vendido (Bs.)',
-            'Cobrado (Bs.)',
-            'Comisión Estimada (Bs.)',
-            'Cartera Vigente (Bs.)',
-            'Mora (Bs.)',
+            "Monto Vendido ($currency)",
+            "Cobrado ($currency)",
+            "Comisión Estimada ($currency)",
+            "Cartera Vigente ($currency)",
+            "Mora ($currency)",
             '% Mora / Cartera',
         ];
     }
 
     public function array(): array
     {
+        $currency = ($this->kpis['moneda'] ?? 'BOB') === 'USD' ? 'USD' : 'Bs.';
         $data = [];
 
         $data[] = ['Período:', $this->desde . ' al ' . $this->hasta, '', '', '', '', '', '', ''];
         $data[] = ['', '', '', '', '', '', '', '', ''];
 
         $data[] = ['RESUMEN DEL EQUIPO', '', '', '', '', '', '', '', ''];
-        $data[] = ['Total Vendido (Bs.)',    number_format($this->kpis['total_vendido'], 2),    '', '', 'Total Cobrado (Bs.)', number_format($this->kpis['total_cobrado'], 2), '', '', ''];
-        $data[] = ['Total Comisiones (Bs.)', number_format($this->kpis['total_comisiones'], 2), '', '', 'Asesores con ventas', $this->kpis['asesores_con_ventas'], '', '', ''];
+        $data[] = ["Total Vendido ($currency)",    number_format($this->kpis['total_vendido'], 2),    '', '', "Total Cobrado ($currency)", number_format($this->kpis['total_cobrado'], 2), '', '', ''];
+        $data[] = ["Total Comisiones ($currency)", number_format($this->kpis['total_comisiones'], 2), '', '', 'Asesores con ventas', $this->kpis['asesores_con_ventas'], '', '', ''];
         $data[] = ['', '', '', '', '', '', '', '', ''];
 
         $data[] = ['RANKING DE ASESORES', '', '', '', '', '', '', '', ''];

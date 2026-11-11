@@ -2,6 +2,9 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Architecture\AggregateRoutes;
+use App\Services\AggregateReports;
+use App\Services\Remote\AggregateReader;
 use App\Http\Controllers\Controller;
 use App\Models\NotaVenta;
 use App\Models\Cuota;
@@ -131,6 +134,11 @@ class ReporteController extends Controller
 
     public function ventasCobros(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'ventas-cobros'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'ventas-cobros', 'json');
+        }
+
         [$desde, $hasta] = $this->rangoFechas($request);
 
         $kpis    = $this->kpisVentas($request, $desde, $hasta);
@@ -153,6 +161,11 @@ class ReporteController extends Controller
 
     public function ventasCobrosExcel(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'ventas-cobros'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'ventas-cobros', 'excel');
+        }
+
         [$desde, $hasta] = $this->rangoFechas($request);
 
         $kpis  = $this->kpisVentas($request, $desde, $hasta);
@@ -170,6 +183,11 @@ class ReporteController extends Controller
 
     public function ventasCobrosPdf(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'ventas-cobros'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'ventas-cobros', 'pdf');
+        }
+
         [$desde, $hasta] = $this->rangoFechas($request);
 
         $kpis   = $this->kpisVentas($request, $desde, $hasta);
@@ -403,6 +421,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function carteraMora(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'cartera-mora'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'cartera-mora', 'json');
+        }
+
         $asesorId = $request->input('asesor_id');
 
         // Cartera total activa
@@ -450,6 +473,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function carteraMoraExcel(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'cartera-mora'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'cartera-mora', 'excel');
+        }
+
         $asesorId = $request->input('asesor_id');
         $notasBase = NotaVenta::where('tipo_venta', 'Crédito')->where('estado', 'Activa');
         if ($asesorId) $notasBase->where('asesor_id', $asesorId);
@@ -472,6 +500,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function carteraMoraPdf(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'cartera-mora'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'cartera-mora', 'pdf');
+        }
+
         $asesorId = $request->input('asesor_id');
         $notasBase = NotaVenta::where('tipo_venta', 'Crédito')->where('estado', 'Activa');
         if ($asesorId) $notasBase->where('asesor_id', $asesorId);
@@ -722,6 +755,11 @@ table.aging td,table.detail td{padding:4px 7px;font-size:9px;border-bottom:1px s
 
     public function comisiones(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'comisiones'), 403);
+        if (AggregateRoutes::enabled($request)) {
+            return $this->remoteReport($request, 'comisiones', 'json');
+        }
+
         [$base, $desde, $hasta] = $this->baseComisionesQuery($request);
 
         $kpis    = $this->kpisComisiones($base);
@@ -746,6 +784,11 @@ table.aging td,table.detail td{padding:4px 7px;font-size:9px;border-bottom:1px s
 
     public function comisionesExcel(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'comisiones'), 403);
+        if (AggregateRoutes::enabled($request)) {
+            return $this->remoteReport($request, 'comisiones', 'excel');
+        }
+
         [$base, $desde, $hasta] = $this->baseComisionesQuery($request);
 
         $kpis    = $this->kpisComisiones($base);
@@ -760,6 +803,11 @@ table.aging td,table.detail td{padding:4px 7px;font-size:9px;border-bottom:1px s
 
     public function comisionesPdf(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'comisiones'), 403);
+        if (AggregateRoutes::enabled($request)) {
+            return $this->remoteReport($request, 'comisiones', 'pdf');
+        }
+
         [$base, $desde, $hasta] = $this->baseComisionesQuery($request);
 
         $kpis    = $this->kpisComisiones($base);
@@ -995,6 +1043,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function desempenoAsesores(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'desempeno-asesores'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'desempeno-asesores', 'json');
+        }
+
         [$desde, $hasta] = $this->rangoDesempeno($request);
         $asesorId = $request->filled('asesor_id') ? (int) $request->asesor_id : null;
 
@@ -1030,6 +1083,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function desempenoAsesoresExcel(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'desempeno-asesores'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'desempeno-asesores', 'excel');
+        }
+
         [$desde, $hasta] = $this->rangoDesempeno($request);
         $asesorId = $request->filled('asesor_id') ? (int) $request->asesor_id : null;
 
@@ -1044,6 +1102,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function desempenoAsesoresPdf(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'desempeno-asesores'), 403);
+        if (AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return $this->remoteReport($request, 'desempeno-asesores', 'pdf');
+        }
+
         [$desde, $hasta] = $this->rangoDesempeno($request);
         $asesorId = $request->filled('asesor_id') ? (int) $request->asesor_id : null;
 
@@ -1282,6 +1345,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function inventarioPropiedades(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'inventario-propiedades'), 403);
+        if (AggregateRoutes::enabled($request)) {
+            return $this->remoteReport($request, 'inventario-propiedades', 'json');
+        }
+
         $kpis         = $this->kpisInventario($request);
         $graficoEstados = $this->graficoEstados($request);
         $graficoTipos   = $this->graficoTipos($request);
@@ -1311,6 +1379,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function inventarioPropiedadesExcel(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'inventario-propiedades'), 403);
+        if (AggregateRoutes::enabled($request)) {
+            return $this->remoteReport($request, 'inventario-propiedades', 'excel');
+        }
+
         $kpis  = $this->kpisInventario($request);
         $rows  = $this->baseInventarioQuery($request)
             ->orderByRaw("FIELD(estado,'Disponible','Reservado','Vendido')")
@@ -1329,6 +1402,11 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function inventarioPropiedadesPdf(Request $request)
     {
+        abort_unless(AggregateRoutes::canReport($request, 'inventario-propiedades'), 403);
+        if (AggregateRoutes::enabled($request)) {
+            return $this->remoteReport($request, 'inventario-propiedades', 'pdf');
+        }
+
         $kpis  = $this->kpisInventario($request);
         $rows  = $this->baseInventarioQuery($request)
             ->orderByRaw("FIELD(estado,'Disponible','Reservado','Vendido')")
@@ -1435,8 +1513,61 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     // ─── Envío de informe por correo ────────────────────────────────────────
 
-    public function destinatariosInforme()
+    private function remoteReport(Request $request, string $kind, string $format)
     {
+        $report = app(AggregateReports::class)->data($request, $kind);
+        if ($format === 'json') {
+            return response()->json($report['body'] + ['moneda' => $report['moneda']]);
+        }
+        if ($format === 'pdf') {
+            [$pdf, $name] = $this->remotePdf($report, $kind);
+
+            return response($pdf, 200, ['Content-Type' => 'application/pdf', 'Content-Disposition' => 'attachment; filename="'.$name.'"']);
+        }
+
+        ['rows' => $rows, 'desde' => $from, 'hasta' => $to] = $report;
+        $kpis = $report['body']['kpis'] + ['moneda' => $report['moneda']];
+        $export = match ($kind) {
+            'ventas-cobros' => new ReporteVentasCobrosExport($rows, $kpis, $from, $to),
+            'cartera-mora' => new ReporteCarteraMoraExport($rows, $kpis, $report['body']['aging'], now()->format('d/m/Y')),
+            'comisiones' => new ReporteComisionesExport($rows, $kpis, $from, $to),
+            'desempeno-asesores' => new ReporteDesempenoAsesoresExport($rows, $kpis, $from, $to),
+            'inventario-propiedades' => new ReporteInventarioPropiedadesExport($rows, $kpis, now()->format('d/m/Y')),
+        };
+
+        return Excel::download($export, "$kind-$from-al-$to.xlsx");
+    }
+
+    private function remotePdf(array $report, string $kind): array
+    {
+        ['rows' => $rows, 'desde' => $from, 'hasta' => $to] = $report;
+        $kpis = $report['body']['kpis'];
+        $company = MiEmpresa::first();
+        $html = match ($kind) {
+            'ventas-cobros' => $this->buildPdfHtml($kpis, $rows, $from, $to, $company),
+            'cartera-mora' => $this->buildCarteraMoraPdfHtml($kpis, $report['body']['aging'], $rows, $company),
+            'comisiones' => $this->buildComisionesPdfHtml($kpis, $rows, $from, $to, $company),
+            'desempeno-asesores' => $this->buildDesempenoPdfHtml($kpis, $rows, $from, $to, $company),
+            'inventario-propiedades' => $this->buildInventarioPdfHtml($rows, $kpis, $company),
+        };
+        if ($report['moneda'] === 'USD' && in_array($kind, ['ventas-cobros', 'cartera-mora', 'desempeno-asesores'], true)) {
+            $html = str_replace('Bs.', 'USD', $html);
+        }
+        $pdf = $this->makeMpdf(['format' => 'A4-L', 'margin_top' => 12, 'margin_bottom' => 12]);
+        $pdf->WriteHTML($html);
+
+        return [$pdf->Output('', 'S'), "$kind-$from-al-$to.pdf"];
+    }
+
+    public function destinatariosInforme(Request $request)
+    {
+        abort_unless(collect(array_keys(AggregateRoutes::REPORTS))->contains(fn ($report) => AggregateRoutes::canReport($request, $report)), 403);
+        if (AggregateRoutes::enabled($request)) {
+            $users = app(AggregateReader::class)->all($request, 'seguridad', 'api/auth/destinatarios-informe')
+                ->filter(fn ($user) => filter_var($user['correo'], FILTER_VALIDATE_EMAIL))->values();
+
+            return response()->json(['data' => $users]);
+        }
         $usuarios = User::where('estado', true)->select('id', 'nombre', 'correo')
             ->orderBy('nombre')->get()
             ->filter(fn($usuario) => filter_var($usuario->correo, FILTER_VALIDATE_EMAIL))
@@ -1447,19 +1578,34 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
     public function enviarInforme(Request $request)
     {
+        $remote = AggregateRoutes::enabled($request);
         $request->validate([
             'reporte'     => 'required|string|in:ventas-cobros,cartera-mora,comisiones,desempeno-asesores,inventario-propiedades',
-            'usuario_ids' => 'required_without:asesor_ids|prohibits:asesor_ids|array|min:1',
-            'usuario_ids.*' => 'integer|distinct|exists:users,id',
-            'asesor_ids' => 'required_without:usuario_ids|prohibits:usuario_ids|array|min:1',
-            'asesor_ids.*' => 'integer|distinct|exists:asesores,id',
+            'usuario_ids' => 'required_without:asesor_ids|prohibits:asesor_ids|array|min:1|max:100',
+            'usuario_ids.*' => 'integer|min:1|distinct'.($remote ? '' : '|exists:users,id'),
+            'asesor_ids' => 'required_without:usuario_ids|prohibits:usuario_ids|array|min:1|max:100',
+            'asesor_ids.*' => 'integer|min:1|distinct'.($remote ? '' : '|exists:asesores,id'),
+            'params' => 'nullable|array',
         ]);
+        abort_unless(AggregateRoutes::canReport($request, $request->reporte), 403);
 
         // Old open browser tabs can still submit advisor IDs; resolve their users.
-        $ids = $request->has('usuario_ids') ? $request->usuario_ids
-            : Asesor::whereIn('id', $request->asesor_ids)->pluck('user_id')->all();
-        $usuarios = User::whereIn('id', $ids)->where('estado', true)->get()
-            ->filter(fn($usuario) => filter_var($usuario->correo, FILTER_VALIDATE_EMAIL));
+        $ids = $request->usuario_ids;
+        if (! $request->has('usuario_ids')) {
+            if ($remote) {
+                $links = app(AggregateReader::class)->read($request, 'comercial', 'api/lecturas/asesores-usuarios',
+                    ['ids' => implode(',', $request->asesor_ids)]);
+                $ids = collect($links['data'])->pluck('subject')->filter(fn ($subject) => ctype_digit((string) $subject))->all();
+                abort_unless(count($ids) === count($request->asesor_ids), 422, 'Seleccione asesores vinculados a un usuario activo.');
+            } else {
+                $ids = Asesor::whereIn('id', $request->asesor_ids)->pluck('user_id')->all();
+            }
+        }
+        $usuarios = $remote
+            ? app(AggregateReader::class)->all($request, 'seguridad', 'api/auth/destinatarios-informe', ['ids' => implode(',', $ids)])
+                ->map(fn ($user) => (object) $user)
+            : User::whereIn('id', $ids)->where('estado', true)->get();
+        $usuarios = $usuarios->filter(fn ($user) => filter_var($user->correo, FILTER_VALIDATE_EMAIL));
 
         if ($usuarios->isEmpty() || $usuarios->count() !== count(array_unique($ids))) {
             return response()->json([
@@ -1477,11 +1623,18 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
         $filtros = Request::create('/', 'GET', is_array($request->input('params')) ? $request->input('params') : []);
 
-        try {
-            [$pdfBinario, $nombreArchivo] = $this->generarPdfBinario($request->reporte, $filtros);
-        } catch (\Throwable $e) {
-            Log::error('Error generando PDF para informe: ' . $e->getMessage());
-            return response()->json(['message' => 'No se pudo generar el PDF del informe.'], 500);
+        $filtros->setUserResolver($request->getUserResolver());
+        $currencyReport = in_array($request->reporte, ['ventas-cobros', 'cartera-mora', 'desempeno-asesores'], true);
+        if ($remote || ($currencyReport && $filtros->filled('moneda'))) {
+            [$pdfBinario, $nombreArchivo] = $this->remotePdf(app(AggregateReports::class)->data($filtros, $request->reporte), $request->reporte);
+        } else {
+            try {
+                [$pdfBinario, $nombreArchivo] = $this->generarPdfBinario($request->reporte, $filtros);
+            } catch (\Throwable $e) {
+                Log::error('Error generando PDF para informe.', ['error' => $e::class]);
+
+                return response()->json(['message' => 'No se pudo generar el PDF del informe.'], 500);
+            }
         }
 
         $enviados = 0;
@@ -1499,7 +1652,7 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
                 $enviados++;
             } catch (\Throwable $e) {
                 $fallidos++;
-                Log::error("Error enviando informe a {$usuario->correo}: " . $e->getMessage());
+                Log::error('Error enviando informe.', ['error' => $e::class]);
             }
         }
 

@@ -27,6 +27,7 @@ class ReporteVentasCobrosExport implements FromArray, WithHeadings, WithStyles, 
 
     public function headings(): array
     {
+        $currency = ($this->kpis['moneda'] ?? 'BOB') === 'USD' ? 'USD' : 'Bs.';
         return [
             'Fecha',
             'N° Nota',
@@ -34,15 +35,16 @@ class ReporteVentasCobrosExport implements FromArray, WithHeadings, WithStyles, 
             'Asesor',
             'Propiedad (Código)',
             'Tipo Venta',
-            'Monto Total (Bs.)',
-            'Cobrado (Bs.)',
-            'Saldo Crédito (Bs.)',
+            "Monto Total ($currency)",
+            "Cobrado ($currency)",
+            "Saldo Crédito ($currency)",
             'Estado',
         ];
     }
 
     public function array(): array
     {
+        $currency = ($this->kpis['moneda'] ?? 'BOB') === 'USD' ? 'USD' : 'Bs.';
         $data = [];
 
         // Fila informativa del período
@@ -51,9 +53,9 @@ class ReporteVentasCobrosExport implements FromArray, WithHeadings, WithStyles, 
 
         // KPIs resumen
         $data[] = ['RESUMEN DEL PERÍODO', '', '', '', '', '', '', '', '', ''];
-        $data[] = ['Total Ventas (Bs.)',    number_format($this->kpis['total_ventas_monto'], 2),    '', '', '', 'Cant. Ventas', $this->kpis['total_ventas_cantidad'], '', '', ''];
-        $data[] = ['Ventas Contado (Bs.)', number_format($this->kpis['ventas_contado_monto'], 2),  '', '', '', 'Total Cobrado (Bs.)', number_format($this->kpis['total_cobrado'], 2), '', '', ''];
-        $data[] = ['Ventas Crédito (Bs.)', number_format($this->kpis['ventas_credito_monto'], 2),  '', '', '', '', '', '', '', ''];
+        $data[] = ["Total Ventas ($currency)",    number_format($this->kpis['total_ventas_monto'], 2),    '', '', '', 'Cant. Ventas', $this->kpis['total_ventas_cantidad'], '', '', ''];
+        $data[] = ["Ventas Contado ($currency)", number_format($this->kpis['ventas_contado_monto'], 2),  '', '', '', "Total Cobrado ($currency)", number_format($this->kpis['total_cobrado'], 2), '', '', ''];
+        $data[] = ["Ventas Crédito ($currency)", number_format($this->kpis['ventas_credito_monto'], 2),  '', '', '', '', '', '', '', ''];
         $data[] = ['', '', '', '', '', '', '', '', '', ''];
 
         // Detalle

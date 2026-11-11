@@ -12,7 +12,8 @@ $path = $root.DIRECTORY_SEPARATOR.basename($relative);
 if (getenv('MULTILIDER_TEST_ISOLATED') !== '1' || ! IsolatedDatabaseGuard::allowedName((string) getenv('DB_DATABASE'))
     || ! $root || ! in_array($relative, ['storage/framework/testing/live-local-config.php', 'storage/framework/testing/live-remote-config.php',
         'storage/framework/testing/f5-remote-config.php', 'storage/framework/testing/f5-local-config.php',
-        'storage/framework/testing/f5-restored-local-config.php', 'storage/framework/testing/f5-restored-remote-config.php'], true)) {
+        'storage/framework/testing/f5-restored-local-config.php', 'storage/framework/testing/f5-restored-remote-config.php',
+        'storage/framework/testing/f6-rollback-config.php'], true)) {
     throw new RuntimeException('Unsafe configuration fixture.');
 }
 if (is_file($path)) {

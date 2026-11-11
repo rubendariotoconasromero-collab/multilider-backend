@@ -83,4 +83,34 @@ if (getenv('APP_ARCHITECTURE') === 'local'
     $kernel->terminate($request, $response);
     return;
 }
+if ($uri === '/api/reportes/enviar-informe'
+    && ($directory = realpath(getenv('MULTILIDER_F6_REPORTS_DIR') ?: '.'))
+    && dirname($directory) === realpath(__DIR__.'/../../storage/framework/testing')
+    && preg_match('/^f6-reports-[a-f0-9]{32}$/D', basename($directory))) {
+    require __DIR__.'/../../vendor/autoload.php';
+    $app = require __DIR__.'/../../bootstrap/app.php';
+    $kernel = $app->make(\Illuminate\Contracts\Http\Kernel::class);
+    $kernel->bootstrap();
+    IsolatedDatabaseGuard::check($app);
+    if (config('mail.default') !== 'array') {
+        throw new RuntimeException('F6 reports require the in-memory mail transport.');
+    }
+    \Illuminate\Support\Facades\Event::listen(\Illuminate\Mail\Events\MessageSent::class,
+        function ($event) use ($directory) {
+            foreach ($event->message->getAttachments() as $attachment) {
+                if (preg_match('/^(ventas-cobros|cartera-mora|comisiones|desempeno-asesores|inventario-propiedades)-[0-9-]+-al-[0-9-]+\.pdf$/D',
+                    $attachment->getFilename() ?? '', $parts)) {
+                    $file = $directory.'/'.$parts[1].'-mail.pdf';
+                    if (! is_file($file)) {
+                        file_put_contents($file, $attachment->getBody(), LOCK_EX);
+                    }
+                }
+            }
+        });
+    $request = \Illuminate\Http\Request::capture();
+    $response = $kernel->handle($request)->send();
+    $kernel->terminate($request, $response);
+
+    return;
+}
 require __DIR__.'/../../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php';

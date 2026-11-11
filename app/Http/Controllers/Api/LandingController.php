@@ -2,10 +2,13 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Architecture\AggregateRoutes;
 use App\Http\Controllers\Controller;
 use App\Models\MiEmpresa;
 use App\Models\Propiedad;
 use App\Models\Asesor;
+use App\Services\Remote\AggregateReader;
+use App\Services\Remote\RemoteCatalogAdministrationGateway;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -22,9 +25,22 @@ class LandingController extends Controller
     /**
      * Obtiene toda la información necesaria para la Landing Page en una sola petición.
      */
-    public function getLandingData()
+    public function getLandingData(Request $request, AggregateReader $reader)
     {
         $empresa = MiEmpresa::first();
+        if (AggregateRoutes::enabled($request)) {
+            $catalog = 'api/public/catalogo/propiedades';
+            $featured = $reader->read($request, 'propiedades', $catalog, ['destacados' => 'true', 'per_page' => 6]);
+            $recent = $reader->read($request, 'propiedades', $catalog, ['per_page' => 6]);
+
+            return response()->json([
+                'empresa' => $empresa,
+                'propiedades_destacadas' => RemoteCatalogAdministrationGateway::adapt($featured['data'], true),
+                'ultimas_propiedades' => RemoteCatalogAdministrationGateway::adapt($recent['data'], true),
+                'asesores' => $reader->publicAdvisers(),
+                'libelula_enabled' => (int) config('services.libelula.enabled', 1),
+            ]);
+        }
 
         $propiedadesDestacadas = Propiedad::with(['sectorUrbano.distrito.ciudad', 'imagenes', 'caracteristicas'])
             ->where('activo', true)
@@ -47,6 +63,13 @@ class LandingController extends Controller
             'asesores'               => $asesores,
             'libelula_enabled'       => (int) config('services.libelula.enabled', 1),
         ], 200);
+    }
+
+    public function adviserPhoto(Request $request, int $id, AggregateReader $reader)
+    {
+        abort_unless(AggregateRoutes::enabled($request), 404);
+
+        return $reader->publicPhoto($id);
     }
 
     /**

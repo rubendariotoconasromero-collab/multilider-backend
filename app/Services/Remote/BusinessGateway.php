@@ -129,7 +129,9 @@ final class BusinessGateway
     public function send(Request $request, string $service, string $method, string $path, ?array $data = null, bool $binary = false): array
     {
         if (! preg_match('~^api/[a-z][a-z0-9/-]*$~D', $path) || str_contains($path, '..')) { throw new \InvalidArgumentException('Ruta de negocio inválida.'); }
-        $headers = ['Authorization' => 'Bearer '.$this->tokens->forRequest($request, $service), 'X-Correlation-ID' => (string) Str::uuid()];
+        $correlation = $request->header('X-Correlation-ID') ?? '';
+        $headers = ['Authorization' => 'Bearer '.$this->tokens->forRequest($request, $service),
+            'X-Correlation-ID' => Str::isUuid($correlation) ? $correlation : (string) Str::uuid()];
         foreach (['Idempotency-Key', 'If-Match'] as $name) { if ($request->hasHeader($name)) { $headers[$name] = $request->header($name); } }
         $options = ['headers' => $headers];
         if ($method === 'GET') { $options['query'] = $data ?? $request->except(['password']); }

@@ -26,7 +26,7 @@ final class IdentityClient
         $started = microtime(true);
         try {
             $response = $this->clients->make('seguridad')->request($method, $path,
-                ['headers' => $headers] + ($data !== [] ? ['json' => $data] : []));
+                ['headers' => $headers] + ($data !== [] ? [$method === 'GET' ? 'query' : 'json' => $data] : []));
         } catch (GuzzleException $e) {
             $this->record($method, $path, 503, $started, $headers['X-Correlation-ID']);
             throw new IntegrationException('Seguridad no está disponible.', 503, 'SERVICE_UNAVAILABLE');

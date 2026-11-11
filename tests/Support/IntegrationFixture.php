@@ -66,6 +66,18 @@ if ($action === 'prepare') {
         $pdo->exec("INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id) VALUES(1,$link)");
     }
     echo "Isolated local and pre-F3 identity fixtures prepared.\n";
+} elseif ($action === 'phase6') {
+    $pdo = identityDb();
+    $pdo->exec("UPDATE roles SET nombre='Administrador' WHERE id=1");
+    $pdo->exec("INSERT INTO permisos(nombre,estado) VALUES('acceso_correo_masivo',1)");
+    $permission = $pdo->lastInsertId();
+    $pdo->exec("INSERT INTO rol_permiso(rol_id,permiso_id) VALUES(1,$permission)");
+    $link = $pdo->lastInsertId();
+    $pdo->exec("INSERT INTO rol_permiso_usuario(user_id,rol_permiso_id) VALUES(1,$link)");
+    $localGrants = new class { use BusinessFixtures; public function add(string $name): void { $this->grant(\App\Models\User::where('correo', 'operator@example.test')->firstOrFail(), $name); } };
+    $localGrants->add('acceso_correo_masivo');
+    DB::table('roles')->where('nombre', 'Rol acceso_correo_masivo')->update(['nombre' => 'Administrador']);
+    DB::table('clientes')->where('ci', 'TEST-CI')->update(['correo' => 'cliente@example.test']);
 } elseif ($action === 'phase5') {
     $pdo = identityDb();
     $localGrants = new class { use BusinessFixtures; public function add(string $name): void { $this->grant(\App\Models\User::where('correo', 'operator@example.test')->firstOrFail(), $name); } };

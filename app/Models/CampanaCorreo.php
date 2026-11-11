@@ -8,6 +8,8 @@ class CampanaCorreo extends Model
 {
     protected $table = 'campanas_correo';
 
+    protected $hidden = ['request_key', 'request_hash', 'actor_issuer', 'actor_subject'];
+
     protected $fillable = [
         'user_id',
         'asunto',
@@ -18,6 +20,7 @@ class CampanaCorreo extends Model
         'total_enviados',
         'total_fallidos',
         'estado',
+        'origen', 'dataset', 'actor_issuer', 'actor_subject', 'actor_name', 'request_key', 'request_hash', 'total_inciertos',
     ];
 
     protected $casts = [

@@ -149,8 +149,17 @@ class ClienteController extends Controller
     }
 
     // Portal del cliente: devuelve su cartera de créditos
-    public function miCartera(Request $request)
+    public function miCartera(Request $request, \App\Services\Remote\AggregateReader $reader)
     {
+        if (\App\Architecture\AggregateRoutes::enabled($request)) {
+            $client = $reader->read($request, 'comercial', 'api/lecturas/mi-cliente');
+            $sales = $reader->all($request, 'finanzas', 'api/lecturas/mi-cartera', [], 10);
+            if (! isset($client['id']) || $sales->contains(fn ($row) => ($row['cliente_id'] ?? null) !== $client['id'])) {
+                throw new \App\Services\Remote\IntegrationException('El vínculo de cartera no es válido.');
+            }
+
+            return response()->json(['cliente' => $client, 'ventas' => $sales->sortByDesc('fecha')->values()]);
+        }
         $user = $request->user();
 
         $cliente = Cliente::where('user_id', $user->id)->firstOrFail();
@@ -169,5 +178,19 @@ class ClienteController extends Controller
             'cliente' => $cliente,
             'ventas'  => $ventas,
         ], 200);
+    }
+
+    public function miComprobante(Request $request, int $id, \App\Services\Remote\AggregateReader $reader)
+    {
+        if (\App\Architecture\AggregateRoutes::enabled($request)) {
+            return app(\App\Services\Remote\RemoteBusinessDocuments::class)
+                ->receipt($reader->read($request, 'finanzas', "api/lecturas/mi-cartera/pagos/$id"));
+        }
+
+        $payment = \App\Models\Pago::where('estado', 'PAGADO')->whereHas('notaVenta', function ($sale) use ($request) {
+            $sale->where('estado', 'Completada')->whereHas('cliente', fn ($client) => $client->where('user_id', $request->user()->id));
+        })->findOrFail($id);
+
+        return app(PagoController::class)->comprobante($payment->id);
     }
 }

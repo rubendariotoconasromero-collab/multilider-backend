@@ -28,7 +28,7 @@ final class CatalogClient
         }
         $options = ['headers' => $headers];
         if ($method === 'GET') {
-            $options['query'] = $request->only(['search', 'tipo', 'ciudad_id', 'distrito_id', 'sector_urbano_id', 'precio_min', 'precio_max', 'habitaciones', 'page', 'per_page', 'kind']);
+            $options['query'] = $request->only(['search', 'tipo', 'ciudad_id', 'distrito_id', 'sector_urbano_id', 'precio_min', 'precio_max', 'habitaciones', 'page', 'per_page', 'kind', 'estado', 'moneda', 'destacados']);
         } elseif ($request->hasFile('imagenes')) {
             $options['timeout'] = 15;
             $options['multipart'] = [];

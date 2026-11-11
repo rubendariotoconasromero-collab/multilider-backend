@@ -15,6 +15,7 @@ final class EnsureArchitectureReady
     public function handle(Request $request, Closure $next)
     {
         if (! $this->mode->isLocal()
+            && ! \App\Architecture\AggregateRoutes::enabled($request)
             && ! (config('architecture.business_enabled') && \App\Architecture\BusinessRoutes::describe($request))
             && ! (config('architecture.business_enabled') && $request->isMethod('GET') && $request->path() === 'api/comercial/opciones')
             && ! (config('architecture.business_enabled') && \App\Architecture\PublicPaymentRoutes::target($request))

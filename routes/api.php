@@ -62,6 +62,7 @@ Route::prefix('public')->group(function () {
 });
 
 Route::get('/landing', [LandingController::class, 'getLandingData']);
+Route::get('/landing/asesores/{id}/foto', [LandingController::class, 'adviserPhoto'])->whereNumber('id');
 Route::get('/empresa/datos', [LandingController::class, 'getCompanyData']);
 Route::get('/landing/propiedades', [LandingController::class, 'getPropiedades'])->middleware(PublicCatalog::class);
 Route::get('/landing/propiedades/{id}', [LandingController::class, 'getPropiedad'])->middleware(PublicCatalog::class);
@@ -86,6 +87,7 @@ Route::middleware(['auth:architecture', \App\Http\Middleware\BusinessDispatch::c
     // Rutas de Autenticación
     Route::get('/me', [AuthController::class, 'me']);
     Route::get('/mi-cartera', [ClienteController::class, 'miCartera']);
+    Route::get('/mi-cartera/pagos/{id}/comprobante', [ClienteController::class, 'miComprobante'])->whereNumber('id');
 
     // Dashboard
     Route::get('dashboard/admin', [DashboardController::class, 'admin']);
@@ -247,12 +249,13 @@ Route::middleware(['auth:architecture', \App\Http\Middleware\BusinessDispatch::c
     });
 
     // Módulo de Correo Masivo
-    Route::prefix('correo-masivo')->group(function () {
+    Route::prefix('correo-masivo')->middleware('permission:acceso_correo_masivo')->group(function () {
         Route::get('grupos', [CorreoMasivoController::class, 'grupos']);
+        Route::get('destinatarios', [CorreoMasivoController::class, 'destinatarios']);
         Route::post('preview-destinatarios', [CorreoMasivoController::class, 'previewDestinatarios']);
         Route::post('enviar', [CorreoMasivoController::class, 'enviar']);
         Route::get('historial', [CorreoMasivoController::class, 'historial']);
-        Route::get('estado/{id}', [CorreoMasivoController::class, 'estado']);
+        Route::get('estado/{id}', [CorreoMasivoController::class, 'estado'])->whereNumber('id');
     });
 
 });

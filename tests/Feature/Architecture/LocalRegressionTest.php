@@ -3,11 +3,20 @@
 namespace Tests\Feature\Architecture;
 
 use App\Mail\InformeReporte;
+use App\Jobs\SendCampaignBatch;
+use App\Mail\CorreoMasivo;
+use App\Models\Cliente;
+use App\Models\NotaVenta;
 use App\Models\Pago;
+use App\Models\PlanPago;
+use App\Services\MailCampaigns;
+use Illuminate\Support\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\Support\BusinessFixtures;
 use Tests\TestCase;
@@ -112,6 +121,8 @@ class LocalRegressionTest extends TestCase
         Mail::fake();
         $user = $this->user();
         Sanctum::actingAs($user);
+        $this->getJson('/api/reportes/inventario-propiedades/pdf')->assertForbidden();
+        $this->grant($user, 'acceso_propiedades');
         $this->property();
         $this->getJson('/api/reportes/destinatarios')->assertOk()->assertJsonPath('data.0.correo', $user->correo);
         $pdf = $this->get('/api/reportes/inventario-propiedades/pdf')->assertOk();
@@ -120,5 +131,81 @@ class LocalRegressionTest extends TestCase
         $this->postJson('/api/reportes/enviar-informe', ['reporte' => 'inventario-propiedades', 'usuario_ids' => [$user->id]])
             ->assertOk()->assertJsonPath('enviados', 1);
         Mail::assertSent(InformeReporte::class, fn ($mail) => $mail->hasTo($user->correo));
+    }
+
+    public function test_currency_report_uses_sale_and_payment_dates_and_excludes_reversals(): void
+    {
+        $user = $this->user();
+        $this->grant($user, 'acceso_historial_ventas');
+        $this->grant($user, 'acceso_pagos');
+        Sanctum::actingAs($user);
+        $bob = $this->property('F6-BOB');
+        $usd = $this->property('F6-USD');
+        $usd->update(['moneda' => 'USD']);
+        $sale = $this->salePayload($bob);
+        $prior = NotaVenta::create(array_replace($sale, ['fecha' => '2026-10-30', 'estado' => 'Completada']));
+        NotaVenta::create(array_replace($sale, ['propiedad_id' => $usd->id, 'estado' => 'Completada']));
+        foreach ([['PAGADO', 90], ['CANCELADO', 100]] as [$status, $amount]) {
+            Pago::create(['nota_venta_id' => $prior->id, 'concepto_pago' => 'VENTA_CONTADO',
+                'fecha_pago' => '2026-11-05', 'monto' => $amount, 'estado' => $status]);
+        }
+        $query = '/api/reportes/ventas-cobros?desde=2026-11-01&hasta=2026-11-30&moneda=';
+        $this->getJson($query.'BOB')->assertOk()->assertJsonPath('kpis.total_ventas_cantidad', 0)->assertJsonPath('kpis.total_cobrado', 90);
+        $this->getJson($query.'USD')->assertOk()->assertJsonPath('kpis.total_ventas_cantidad', 1)->assertJsonPath('kpis.total_cobrado', 0);
+    }
+
+    public function test_campaign_persists_recipients_and_worker_isolates_datasets_and_replays(): void
+    {
+        Queue::fake();
+        Mail::fake();
+        $user = $this->user();
+        $this->grant($user, 'acceso_correo_masivo');
+        Sanctum::actingAs($user);
+        Cliente::create(['user_id' => $this->user('client@example.test')->id, 'ci' => 'F6-MAIL',
+            'nombre_completo' => 'Cliente de campaña', 'correo' => 'client@example.test', 'estado' => true]);
+        $preview = $this->postJson('/api/correo-masivo/preview-destinatarios', ['tipo' => 'activos'])
+            ->assertOk()->assertJsonPath('total', 1)->json('preview_token');
+        $payload = ['tipo' => 'activos', 'asunto' => 'Prueba', 'mensaje' => 'Prueba', 'preview_token' => $preview,
+            'request_key' => (string) Str::uuid()];
+        $id = $this->postJson('/api/correo-masivo/enviar', $payload)->assertCreated()->json('campana_id');
+        $this->postJson('/api/correo-masivo/enviar', $payload)->assertOk()->assertJsonPath('campana_id', $id);
+        Queue::assertPushed(SendCampaignBatch::class, 1);
+        $job = Queue::pushed(SendCampaignBatch::class)->sole();
+        config(['architecture.aggregate_dataset' => 'another-fixture']);
+        $job->handle(app(MailCampaigns::class));
+        Mail::assertNothingSent();
+        $this->getJson("/api/correo-masivo/estado/$id")->assertNotFound();
+        config(['architecture.aggregate_dataset' => 'default']);
+        $job->handle(app(MailCampaigns::class));
+        $job->handle(app(MailCampaigns::class));
+        Mail::assertSent(CorreoMasivo::class, 1);
+        $this->getJson("/api/correo-masivo/estado/$id")->assertOk()->assertJsonPath('total_enviados', 1);
+        DB::table('campana_destinatarios')->where('campana_id', $id)
+            ->update(['estado' => 'enviando', 'updated_at' => now()->subMinutes(11)]);
+        $this->artisan('correo:reanudar', ['id' => $id])->assertSuccessful();
+        $this->getJson("/api/correo-masivo/estado/$id")->assertOk()->assertJsonPath('total_inciertos', 1);
+        Queue::assertPushed(SendCampaignBatch::class, 1);
+    }
+
+    public function test_local_arrears_uses_pending_interest_and_capital_and_excludes_replaced_installments(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-11 12:00:00'));
+        $user = $this->user();
+        $this->grant($user, 'acceso_pagos');
+        Sanctum::actingAs($user);
+        $sale = NotaVenta::create($this->salePayload($this->property(), true));
+        $plan = PlanPago::create(['nota_venta_id' => $sale->id, 'monto' => 100, 'numero_cuotas' => 1,
+            'fecha_inicio' => '2026-11-06', 'fecha_final' => '2026-11-06', 'plazo' => '1 mes']);
+        $quota = ['numero_cuota' => 1, 'monto_cuota' => 110, 'monto_interes' => 10,
+            'monto_capital' => 100, 'saldo_capital' => 0, 'fecha_vencimiento' => '2026-11-06'];
+        $plan->cuotas()->create($quota + ['estado' => 'Reemplazada']);
+        $pending = $plan->cuotas()->create($quota + ['estado' => 'Pendiente']);
+        Pago::create(['nota_venta_id' => $sale->id, 'cuota_id' => $pending->id, 'concepto_pago' => 'CUOTA',
+            'fecha_pago' => '2026-11-07', 'monto' => 15, 'estado' => 'PAGADO']);
+
+        $this->getJson('/api/reportes/cartera-mora?moneda=BOB&desde=2026-11-05&hasta=2026-11-11')
+            ->assertOk()->assertJsonPath('kpis.cartera_total', 95)
+            ->assertJsonPath('kpis.monto_vencido', 95)->assertJsonPath('kpis.cuotas_vencidas_count', 1)
+            ->assertJsonPath('cuotas.data.0.id', $pending->id)->assertJsonPath('cuotas.data.0.dias_mora', 5);
     }
 }

@@ -19,6 +19,15 @@ class DashboardController extends Controller
     // -------------------------------------------------------
     public function admin(Request $request)
     {
+        $user = $request->user();
+        $admin = $user instanceof \App\Auth\RemotePrincipal
+            ? collect($user->toArray()['roles_permisos'])->contains(fn ($row) => $row['rol_permiso']['rol']['nombre'] === 'Administrador')
+            : $user->asignaciones()->whereHas('rol', fn ($role) => $role->where('nombre', 'Administrador')->where('estado', true))->exists();
+        abort_unless($admin, 403);
+        if (\App\Architecture\AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return response()->json(app(\App\Services\AggregateDashboard::class)->data($request, false));
+        }
+
         $desde = $request->input('desde', now()->startOfMonth()->toDateString());
         $hasta = $request->input('hasta', now()->toDateString());
 
@@ -152,6 +161,10 @@ class DashboardController extends Controller
     // -------------------------------------------------------
     public function asesor(Request $request)
     {
+        if (\App\Architecture\AggregateRoutes::enabled($request) || $request->filled('moneda')) {
+            return response()->json(app(\App\Services\AggregateDashboard::class)->data($request, true));
+        }
+
         $user   = $request->user();
         $asesor = Asesor::where('user_id', $user->id)->first();
 

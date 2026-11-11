@@ -93,6 +93,7 @@ class EnviarCorreoMasivoJob implements ShouldQueue
     private function canRunInCurrentMode(): bool
     {
         $mode = app(\App\Architecture\ArchitectureMode::class);
-        return $mode->isLocal() && $this->architectureMode === $mode->value;
+        return $mode->isLocal() && $this->architectureMode === $mode->value
+            && config('architecture.aggregate_dataset') === 'default';
     }
 }
