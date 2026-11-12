@@ -1,4 +1,4 @@
-param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[switch]$RotationTests,[switch]$CrashTests,[switch]$AggregateTests,[switch]$MigrationTests,[string]$MigrationSource,[switch]$ApplyMigrationSource,[string]$MySqlBin)
+param([switch]$BrowserTests,[switch]$RecoveryTests,[switch]$RestoreTests,[switch]$AcceptanceTests,[switch]$RotationTests,[switch]$CrashTests,[switch]$AggregateTests,[switch]$MigrationTests,[string]$MigrationSource,[switch]$ApplyMigrationSource,[switch]$Phase8Tests,[string]$MySqlBin)
 $ErrorActionPreference='Stop'
 if($env:MULTILIDER_TEST_ISOLATED -ne '1' -or $env:DB_DATABASE -ne 'multilider_tests_isolated' -or $env:DB_PORT -eq '3306'){throw 'Run test-isolated.ps1 -Integration -Phase5.'}
 $backend=Split-Path $PSScriptRoot -Parent
@@ -6,6 +6,7 @@ $workspace=Split-Path $backend -Parent
 $runtime=Join-Path $backend 'storage\framework\testing'
 $previous=@{};$processes=[Collections.Generic.List[Diagnostics.Process]]::new();$started=@{};$launches=@{}
 $restoreSql=@{};$restoreMySql=@{};$mysqlRestoreArgs=$null
+$phase8Sql=@{}
 function Set-F5([string]$name,[string]$value) {
     if(!$previous.ContainsKey($name)){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
     [Environment]::SetEnvironmentVariable($name,$value,'Process')
@@ -59,8 +60,8 @@ function Set-F5Role([string]$name,[hashtable]$sqlConnections=$connections) {
     }
     if($role -ne 'seguridad'){Set-F5 'ConnectionStrings__SqlServer' $sqlConnections[$role]}
 }
-function Restart-F5([string]$name,[string]$suffix) {
-    if($name -ne 'laravel'){Set-F5Role $name}
+function Restart-F5([string]$name,[string]$suffix,[hashtable]$sqlConnections=$connections) {
+    if($name -in ($roles+@('comercial-second'))){Set-F5Role $name $sqlConnections}
     $launch=$launches[$name]
     $started[$name]=Start-F5 "f5-$name-$suffix" $launch.file $launch.args $launch.folder
     Wait-F5 $launch.probe 401
@@ -122,6 +123,11 @@ try {
             $f7Root=(Resolve-Path -LiteralPath $MigrationSource).Path
             if((Split-Path -Parent $f7Root) -ne (Resolve-Path -LiteralPath $runtime).Path -or (Split-Path -Leaf $f7Root) -notmatch '^f7-[a-f0-9]{32}$'){
                 throw 'F7 real copy is outside the private test directory.'
+            }
+            if($Phase8Tests){
+                $f7Root=& (Join-Path $PSScriptRoot 'copy-checkpoint-f8.ps1') $f7Root $runtime
+                Set-F5 'LOG_CHANNEL' 'stderr'
+                Set-F5 'LOG_LEVEL' 'error'
             }
         } else {
             $f7Root=Join-Path $runtime ('f7-'+[Guid]::NewGuid().ToString('N'))
@@ -254,7 +260,8 @@ try {
         Set-F5 'APP_ARCHITECTURE' 'local';Set-F5 'APP_CONFIG_CACHE' 'storage/framework/testing/f5-local-config.php'
         & php (Join-Path $backend 'tests/Support/CacheFixture.php')
         if($LASTEXITCODE -ne 0){throw 'Local config cache failed.'}
-        $null=Start-F5 'f5-laravel-local' (Get-Command php).Source @('-S',"127.0.0.1:$localPort",'-t','.',(Join-Path $backend 'tests/Support/FixtureHttpRouter.php')) (Join-Path $backend 'public')
+        $localServer=Start-F5 'f5-laravel-local' (Get-Command php).Source @('-S',"127.0.0.1:$localPort",'-t','.',(Join-Path $backend 'tests/Support/FixtureHttpRouter.php')) (Join-Path $backend 'public')
+        if($Phase8Tests){$started['laravel-local']=$localServer}
         $launches['laravel-local']=@{file=(Get-Command php).Source;args=@('-S',"127.0.0.1:$localPort",'-t','.',(Join-Path $backend 'tests/Support/FixtureHttpRouter.php'));folder=(Join-Path $backend 'public');probe="http://127.0.0.1:$localPort/api/me"}
         Wait-F5 "http://127.0.0.1:$localPort/api/me" 401
         if($AcceptanceTests){
@@ -284,6 +291,10 @@ try {
         if($ApplyMigrationSource){
             & php $exercise real-public
             if($LASTEXITCODE -ne 0){throw 'F7 real-copy public reconciliation failed.'}
+            if($Phase8Tests){
+                . (Join-Path $PSScriptRoot 'recovery-acceptance-f8.ps1')
+                return
+            }
             foreach($name in @('seguridad','propiedades','finanzas','comercial','comercial-second')){Stop-OwnedF5 $started[$name]}
             & php $exercise real-local-only
             if($LASTEXITCODE -ne 0){throw 'F7 real-copy autonomous check failed.'}
@@ -600,6 +611,10 @@ try {
             & $dotnet $fixture drop
             if($restoreSql.ContainsKey($role)){
                 [Environment]::SetEnvironmentVariable($name,$restoreSql[$role],'Process')
+                & $dotnet $fixture drop
+            }
+            if($phase8Sql.ContainsKey($role)){
+                [Environment]::SetEnvironmentVariable($name,$phase8Sql[$role],'Process')
                 & $dotnet $fixture drop
             }
         }

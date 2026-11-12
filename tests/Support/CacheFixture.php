@@ -19,12 +19,17 @@ if (getenv('MULTILIDER_TEST_ISOLATED') !== '1' || ! IsolatedDatabaseGuard::allow
 if (is_file($path)) {
     unlink($path);
 }
-$storage = IsolatedDatabaseGuard::phaseSevenStorage() ?? $root.DIRECTORY_SEPARATOR.'app';
-if (IsolatedDatabaseGuard::allowedName((string) getenv('MULTILIDER_F5_RESTORED_MYSQL')) && getenv('DB_DATABASE') === getenv('MULTILIDER_F5_RESTORED_MYSQL')) {
+$phaseSevenStorage = IsolatedDatabaseGuard::phaseSevenStorage();
+$storage = $phaseSevenStorage ?? $root.DIRECTORY_SEPARATOR.'app';
+if ($phaseSevenStorage === null && IsolatedDatabaseGuard::allowedName((string) getenv('MULTILIDER_F5_RESTORED_MYSQL')) && getenv('DB_DATABASE') === getenv('MULTILIDER_F5_RESTORED_MYSQL')) {
     $storage = getenv('MULTILIDER_F5_RESTORED_STORAGE');
     if (! $storage || dirname(dirname($storage)) !== $root || ! preg_match('/^f5-restore-[a-f0-9]{32}$/D', basename(dirname($storage)))) {
         throw new RuntimeException('Unsafe restored storage path.');
     }
+}
+$views = $storage.DIRECTORY_SEPARATOR.'framework'.DIRECTORY_SEPARATOR.'views';
+if (! is_dir($views) && ! mkdir($views, 0700, true)) {
+    throw new RuntimeException('Could not prepare the private compiled views directory.');
 }
 $_ENV['LARAVEL_STORAGE_PATH'] = $_SERVER['LARAVEL_STORAGE_PATH'] = $storage;
 set_exception_handler(function (Throwable $error) {

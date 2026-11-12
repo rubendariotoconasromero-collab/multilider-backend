@@ -8,6 +8,7 @@ param(
     [switch]$MigrationTests,
     [string]$MigrationSource,
     [switch]$ApplyMigrationSource,
+    [switch]$Phase8Tests,
     [switch]$RecoveryTests,
     [switch]$RestoreTests,
     [switch]$AcceptanceTests,
@@ -22,6 +23,7 @@ if ($MigrationTests -and (!$Integration -or !$Phase5 -or $AggregateTests -or $Ac
     throw '-MigrationTests requiere -Integration -Phase5 en una ejecución exclusiva.'
 }
 if ($ApplyMigrationSource -and (!$MigrationTests -or !$MigrationSource)) { throw '-ApplyMigrationSource requiere una copia privada y -MigrationTests.' }
+if ($Phase8Tests -and !$ApplyMigrationSource) { throw '-Phase8Tests requiere -ApplyMigrationSource y el respaldo de F7.' }
 if ($AcceptanceTests -and (!$Integration -or !$Phase5)) { throw '-AcceptanceTests requiere -Integration -Phase5.' }
 if (($RotationTests -or $CrashTests) -and (!$Integration -or !$Phase5)) { throw '-RotationTests y -CrashTests requieren -Integration -Phase5.' }
 $project = Split-Path $PSScriptRoot -Parent
@@ -81,7 +83,7 @@ try {
             $result = $LASTEXITCODE
         }
         if ($result -eq 0 -and $Integration) {
-            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -AcceptanceTests:$AcceptanceTests -RotationTests:$RotationTests -CrashTests:$CrashTests -AggregateTests:$AggregateTests -MigrationTests:$MigrationTests -MigrationSource $MigrationSource -ApplyMigrationSource:$ApplyMigrationSource -MySqlBin $MySqlBin }
+            if ($Phase5) { & (Join-Path $PSScriptRoot 'integration-f5.ps1') -BrowserTests:$BrowserTests -RecoveryTests:$RecoveryTests -RestoreTests:$RestoreTests -AcceptanceTests:$AcceptanceTests -RotationTests:$RotationTests -CrashTests:$CrashTests -AggregateTests:$AggregateTests -MigrationTests:$MigrationTests -MigrationSource $MigrationSource -ApplyMigrationSource:$ApplyMigrationSource -Phase8Tests:$Phase8Tests -MySqlBin $MySqlBin }
             else { & (Join-Path $PSScriptRoot 'integration-f3.ps1') -BrowserTests:$BrowserTests }
             $result = $LASTEXITCODE
         }

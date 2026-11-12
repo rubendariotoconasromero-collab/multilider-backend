@@ -22,7 +22,7 @@ class PagoController extends Controller
     // 1. Listar pagos con filtros
     public function index(Request $request)
     {
-        $query = Pago::with(['notaVenta.cliente', 'cuota.planPago', 'metodoPago', 'cuenta']);
+        $query = Pago::with(['notaVenta.cliente', 'notaVenta.propiedad:id,moneda', 'cuota.planPago', 'metodoPago', 'cuenta']);
 
         // Filtro por Fechas
         if ($request->filled('fecha_inicio') && $request->filled('fecha_fin')) {
@@ -386,7 +386,7 @@ class PagoController extends Controller
     public function pagosPendientes(Request $request)
     {
         $query = Pago::where('estado', 'PENDIENTE_PAGO')
-            ->with(['notaVenta.cliente', 'notaVenta.asesor', 'cuota.planPago', 'metodoPago'])
+            ->with(['notaVenta.cliente', 'notaVenta.asesor', 'notaVenta.propiedad:id,moneda', 'cuota.planPago', 'metodoPago'])
             ->orderBy('created_at', 'desc');
 
         if ($request->filled('concepto_pago')) {

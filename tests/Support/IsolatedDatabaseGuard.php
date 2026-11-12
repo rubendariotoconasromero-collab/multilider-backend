@@ -26,6 +26,17 @@ final class IsolatedDatabaseGuard
             throw new \RuntimeException('Invalid Phase 7 storage fixture.');
         }
 
+        $restored = getenv('MULTILIDER_F8_RESTORED_STORAGE');
+        if ($restored !== false && $restored !== '') {
+            if (! is_file($root.DIRECTORY_SEPARATOR.'checkpoint-origen-f8.json')
+                || $restored !== $root.DIRECTORY_SEPARATOR.'laravel-restored'
+                || realpath($restored) !== $restored) {
+                throw new \RuntimeException('Invalid Phase 8 storage fixture.');
+            }
+
+            return $restored;
+        }
+
         return $root.DIRECTORY_SEPARATOR.'laravel';
     }
 

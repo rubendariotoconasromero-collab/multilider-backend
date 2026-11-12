@@ -321,16 +321,19 @@ class DualIdentityTest extends TestCase
         $email = 'mail-fixture@tecnoweb.space';
         if ($mode === 'microservices') {
             $dto = $this->dto(100, $email);
-            $this->remote([...array_fill(0, 4, $this->ok($dto)), $this->ok([])]);
+            $this->remote([...array_fill(0, 5, $this->ok($dto)), $this->ok([])]);
             // The mutable email claim may predate a profile update; sub remains stable.
             $token = $this->token(['email' => 'previous-address@tecnoweb.space']);
         } else {
             $token = $this->user($email)->createToken('mail-test')->plainTextToken;
         }
         $mail = \Mockery::mock(ProfileMailbox::class);
-        $mail->shouldReceive('open')->times(3)->with($email, 'separate-mail-fixture-secret')->andReturn('fixture-connection');
-        $mail->shouldReceive('close')->times(3)->with('fixture-connection');
-        $mail->shouldReceive('messages')->once()->with('fixture-connection', 'INBOX', 1)->andReturn(['data' => [], 'total' => 0]);
+        $mail->shouldReceive('open')->times(4)->with($email, 'separate-mail-fixture-secret')->andReturn('fixture-connection');
+        $mail->shouldReceive('close')->times(4)->with('fixture-connection');
+        $mail->shouldReceive('messages')->once()->with('fixture-connection', 'INBOX', 1)
+            ->andReturn(['data' => [['uid' => 7, 'subject' => 'Fixture']], 'total' => 1]);
+        $mail->shouldReceive('read')->once()->with('fixture-connection', 'INBOX', 7)
+            ->andReturn(['uid' => 7, 'body' => 'Isolated message']);
         $mail->shouldReceive('send')->once()->with('fixture-connection', $email, \Mockery::type('string'), 'separate-mail-fixture-secret', \Mockery::type('array'))->andReturn(['message' => 'Sent fixture']);
         app()->instance(ProfileMailbox::class, $mail);
         $this->withToken($token)->postJson('/api/perfil/correo/conectar', ['password' => 'separate-mail-fixture-secret'])->assertOk()->assertJsonPath('connected', true);
@@ -338,7 +341,8 @@ class DualIdentityTest extends TestCase
         $this->assertNotSame('separate-mail-fixture-secret', Cache::get($key));
         $this->assertSame('separate-mail-fixture-secret', Crypt::decryptString(Cache::get($key)));
         $this->getJson('/api/perfil/correo/estado')->assertOk()->assertJsonPath('connected', true);
-        $this->getJson('/api/perfil/correo/mensajes?folder=INBOX')->assertOk()->assertJsonPath('total', 0);
+        $this->getJson('/api/perfil/correo/mensajes?folder=INBOX')->assertOk()->assertJsonPath('data.0.uid', 7);
+        $this->getJson('/api/perfil/correo/mensajes/7?folder=INBOX')->assertOk()->assertJsonPath('body', 'Isolated message');
         $this->postJson('/api/perfil/correo/enviar', ['to' => 'receiver@example.test', 'subject' => 'Fixture', 'body' => 'Test only'])->assertOk();
         $this->postJson('/api/logout')->assertOk();
         $this->assertFalse(Cache::has($key));
