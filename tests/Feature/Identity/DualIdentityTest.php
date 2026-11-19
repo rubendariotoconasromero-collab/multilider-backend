@@ -315,17 +315,24 @@ class DualIdentityTest extends TestCase
         return [['local'], ['microservices']];
     }
 
-    /** @dataProvider apiModes */
-    public function test_profile_mail_uses_a_separate_encrypted_credential_in_both_modes(string $mode): void
+    public static function mailboxModes(): array
+    {
+        return [['local', false], ['microservices', false], ['local', true], ['microservices', true]];
+    }
+
+    /** @dataProvider mailboxModes */
+    public function test_profile_mail_uses_a_separate_encrypted_credential_in_both_modes(string $mode, bool $alias): void
     {
         $email = 'mail-fixture@tecnoweb.space';
+        $loginEmail = $alias ? 'mail-fixture@tecnoweb.edu' : $email;
+        config(['mail.domain_aliases' => $alias ? ['tecnoweb.edu' => 'tecnoweb.space'] : []]);
         if ($mode === 'microservices') {
-            $dto = $this->dto(100, $email);
+            $dto = $this->dto(100, $loginEmail);
             $this->remote([...array_fill(0, 5, $this->ok($dto)), $this->ok([])]);
             // The mutable email claim may predate a profile update; sub remains stable.
             $token = $this->token(['email' => 'previous-address@tecnoweb.space']);
         } else {
-            $token = $this->user($email)->createToken('mail-test')->plainTextToken;
+            $token = $this->user($loginEmail)->createToken('mail-test')->plainTextToken;
         }
         $mail = \Mockery::mock(ProfileMailbox::class);
         $mail->shouldReceive('open')->times(4)->with($email, 'separate-mail-fixture-secret')->andReturn('fixture-connection');
@@ -340,11 +347,33 @@ class DualIdentityTest extends TestCase
         $key = ProfileMailSession::key(request());
         $this->assertNotSame('separate-mail-fixture-secret', Cache::get($key));
         $this->assertSame('separate-mail-fixture-secret', Crypt::decryptString(Cache::get($key)));
-        $this->getJson('/api/perfil/correo/estado')->assertOk()->assertJsonPath('connected', true);
+        $this->getJson('/api/perfil/correo/estado')->assertOk()->assertJsonPath('connected', true)->assertJsonPath('email', $email);
         $this->getJson('/api/perfil/correo/mensajes?folder=INBOX')->assertOk()->assertJsonPath('data.0.uid', 7);
         $this->getJson('/api/perfil/correo/mensajes/7?folder=INBOX')->assertOk()->assertJsonPath('body', 'Isolated message');
         $this->postJson('/api/perfil/correo/enviar', ['to' => 'receiver@example.test', 'subject' => 'Fixture', 'body' => 'Test only'])->assertOk();
         $this->postJson('/api/logout')->assertOk();
         $this->assertFalse(Cache::has($key));
+        $this->assertDatabaseCount('users', $mode === 'local' ? 1 : 0);
+        if ($mode === 'local') $this->assertDatabaseHas('users', ['correo' => $loginEmail]);
+    }
+
+    public function test_mail_aliases_are_explicit_and_cached_credentials_do_not_follow_a_changed_mailbox(): void
+    {
+        config(['mail.domain_aliases' => []]);
+        $this->assertSame('carlos@tecnoweb.edu', \App\Services\MailAddresses::resolve(' Carlos@tecnoweb.edu '));
+        $request = Request::create('/');
+        $request->headers->set('Authorization', 'Bearer alias-fixture');
+        $user = $this->user('carlos@tecnoweb.edu');
+        $request->setUserResolver(fn () => $user);
+        $oldKey = ProfileMailSession::key($request);
+        Cache::put($oldKey, 'old-encrypted-fixture', 1200);
+        ProfileMailSession::remember($request);
+        config(['mail.domain_aliases' => ['tecnoweb.edu' => 'tecnoweb.space']]);
+        $this->assertSame('carlos@tecnoweb.space', \App\Services\MailAddresses::resolve($user->correo));
+        $this->assertSame('client@example.test', \App\Services\MailAddresses::resolve('client@example.test'));
+        $this->assertNotSame($oldKey, ProfileMailSession::key($request));
+        $this->assertFalse(Cache::has(ProfileMailSession::key($request)));
+        ProfileMailSession::forget($request);
+        $this->assertFalse(Cache::has($oldKey));
     }
 }

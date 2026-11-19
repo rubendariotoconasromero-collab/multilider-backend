@@ -14,7 +14,7 @@ final class ProfileMailSession
         $identity = $user instanceof RemotePrincipal
             ? 'remote:'.hash('sha256', $user->claims['iss']).':'.$user->claims['sub'] : 'local:'.$user->id;
 
-        return 'profile-mail:'.$identity.':'.hash('sha256', $request->bearerToken().'|'.$user->correo);
+        return 'profile-mail:'.$identity.':'.hash('sha256', $request->bearerToken().'|'.MailAddresses::resolve($user->correo));
     }
 
     public static function forget(Request $request): void

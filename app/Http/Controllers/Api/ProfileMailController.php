@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\MailAddresses;
 use App\Services\ProfileMailbox;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -13,7 +14,7 @@ class ProfileMailController extends Controller
 {
     private function email(Request $request): string
     {
-        $email = strtolower(trim($request->user()->correo));
+        $email = MailAddresses::resolve($request->user()->correo);
         abort_unless(filter_var($email, FILTER_VALIDATE_EMAIL) && str_ends_with($email, '@tecnoweb.space') && $request->user()->estado,
             422, 'Para usar este gestor necesitas un usuario activo con buzón @tecnoweb.space.');
         return $email;
@@ -26,8 +27,8 @@ class ProfileMailController extends Controller
 
     public function status(Request $request)
     {
-        $this->email($request);
-        return response()->json(['email' => $request->user()->correo, 'connected' => Cache::has($this->key($request))]);
+        $email = $this->email($request);
+        return response()->json(['email' => $email, 'connected' => Cache::has($this->key($request))]);
     }
 
     public function connect(Request $request, ProfileMailbox $mail)

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Architecture\AggregateRoutes;
 use App\Services\AggregateReports;
+use App\Services\MailAddresses;
 use App\Services\Remote\AggregateReader;
 use App\Http\Controllers\Controller;
 use App\Models\NotaVenta;
@@ -1564,7 +1565,8 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
         abort_unless(collect(array_keys(AggregateRoutes::REPORTS))->contains(fn ($report) => AggregateRoutes::canReport($request, $report)), 403);
         if (AggregateRoutes::enabled($request)) {
             $users = app(AggregateReader::class)->all($request, 'seguridad', 'api/auth/destinatarios-informe')
-                ->filter(fn ($user) => filter_var($user['correo'], FILTER_VALIDATE_EMAIL))->values();
+                ->filter(fn ($user) => filter_var($user['correo'], FILTER_VALIDATE_EMAIL))
+                ->map(fn ($user) => array_replace($user, ['correo' => MailAddresses::resolve($user['correo'])]))->values();
 
             return response()->json(['data' => $users]);
         }
@@ -1573,7 +1575,9 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
             ->filter(fn($usuario) => filter_var($usuario->correo, FILTER_VALIDATE_EMAIL))
             ->values();
 
-        return response()->json(['data' => $usuarios]);
+        return response()->json(['data' => $usuarios->map(fn ($user) => [
+            'id' => $user->id, 'nombre' => $user->nombre, 'correo' => MailAddresses::resolve($user->correo),
+        ])]);
     }
 
     public function enviarInforme(Request $request)
@@ -1640,9 +1644,9 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
         $enviados = 0;
         $fallidos = 0;
 
-        foreach ($usuarios->unique(fn($usuario) => strtolower($usuario->correo)) as $usuario) {
+        foreach ($usuarios->unique(fn($usuario) => MailAddresses::resolve($usuario->correo)) as $usuario) {
             try {
-                Mail::to($usuario->correo)
+                Mail::to(MailAddresses::resolve($usuario->correo))
                     ->send(new InformeReporte(
                         $usuario->nombre,
                         $nombreReporte,

@@ -15,6 +15,8 @@ return [
 
     'default' => env('MAIL_MAILER', 'smtp'),
 
+    'domain_aliases' => json_decode(env('MAIL_DOMAIN_ALIASES', '{}'), true, flags: JSON_THROW_ON_ERROR),
+
     /*
     |--------------------------------------------------------------------------
     | Mailer Configurations
@@ -36,7 +38,7 @@ return [
     'mailers' => [
         'smtp' => [
             'transport' => 'smtp',
-            'url' => env('MAIL_URL'),
+            'url' => env('MAIL_URL') ?: null,
             'host' => env('MAIL_HOST', 'smtp.mailgun.org'),
             'port' => env('MAIL_PORT', 587),
             'encryption' => env('MAIL_ENCRYPTION', 'tls'),

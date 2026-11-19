@@ -116,6 +116,23 @@ class LocalRegressionTest extends TestCase
         $this->assertDatabaseHas('ingresos', ['pago_id' => $payment->id, 'moneda' => 'Bs', 'monto' => 9500]);
     }
 
+    public function test_empty_optional_mail_url_still_builds_the_smtp_transport(): void
+    {
+        $environment = \Illuminate\Support\Env::getRepository();
+        $previous = $environment->get('MAIL_URL');
+        $environment->clear('MAIL_URL');
+        $environment->set('MAIL_URL', '');
+        try {
+            $mailConfig = require config_path('mail.php');
+            config(['mail.mailers.smtp' => $mailConfig['mailers']['smtp']]);
+            $this->assertInstanceOf(\Symfony\Component\Mailer\Transport\Smtp\EsmtpTransport::class,
+                Mail::mailer('smtp')->getSymfonyTransport());
+        } finally {
+            $environment->clear('MAIL_URL');
+            if ($previous !== null) $environment->set('MAIL_URL', $previous);
+        }
+    }
+
     public function test_inventory_pdf_excel_and_mail_recipient_use_local_users(): void
     {
         Mail::fake();
@@ -152,6 +169,33 @@ class LocalRegressionTest extends TestCase
         $query = '/api/reportes/ventas-cobros?desde=2026-11-01&hasta=2026-11-30&moneda=';
         $this->getJson($query.'BOB')->assertOk()->assertJsonPath('kpis.total_ventas_cantidad', 0)->assertJsonPath('kpis.total_cobrado', 90);
         $this->getJson($query.'USD')->assertOk()->assertJsonPath('kpis.total_ventas_cantidad', 1)->assertJsonPath('kpis.total_cobrado', 0);
+    }
+
+    public function test_mail_aliases_are_shown_and_used_for_reports_and_campaigns_without_changing_user_data(): void
+    {
+        Mail::fake();
+        Queue::fake();
+        config(['mail.domain_aliases' => ['tecnoweb.edu' => 'tecnoweb.space']]);
+        $user = $this->user('report-fixture@tecnoweb.edu');
+        $this->grant($user, 'acceso_propiedades');
+        $this->grant($user, 'acceso_correo_masivo');
+        Sanctum::actingAs($user);
+        $this->property();
+        $this->getJson('/api/reportes/destinatarios')->assertOk()->assertJsonPath('data.0.correo', 'report-fixture@tecnoweb.space');
+        $this->postJson('/api/reportes/enviar-informe', ['reporte' => 'inventario-propiedades', 'usuario_ids' => [$user->id]])
+            ->assertOk()->assertJsonPath('enviados', 1);
+        Mail::assertSent(InformeReporte::class, fn ($mail) => $mail->hasTo('report-fixture@tecnoweb.space'));
+
+        Cliente::create(['user_id' => $user->id, 'ci' => 'MAIL-ALIAS',
+            'nombre_completo' => 'Cliente ficticio', 'correo' => $user->correo, 'estado' => true]);
+        $preview = $this->postJson('/api/correo-masivo/preview-destinatarios', ['tipo' => 'activos'])
+            ->assertOk()->assertJsonPath('destinatarios.0.correo', 'report-fixture@tecnoweb.space')->json('preview_token');
+        $id = $this->postJson('/api/correo-masivo/enviar', ['tipo' => 'activos', 'asunto' => 'Prueba', 'mensaje' => 'Prueba',
+            'preview_token' => $preview, 'request_key' => (string) Str::uuid()])->assertCreated()->json('campana_id');
+        $this->assertDatabaseHas('campana_destinatarios', ['campana_id' => $id, 'correo' => 'report-fixture@tecnoweb.space']);
+        Queue::pushed(SendCampaignBatch::class)->sole()->handle(app(MailCampaigns::class));
+        Mail::assertSent(CorreoMasivo::class, fn ($mail) => $mail->hasTo('report-fixture@tecnoweb.space'));
+        $this->assertDatabaseHas('users', ['id' => $user->id, 'correo' => 'report-fixture@tecnoweb.edu']);
     }
 
     public function test_campaign_persists_recipients_and_worker_isolates_datasets_and_replays(): void

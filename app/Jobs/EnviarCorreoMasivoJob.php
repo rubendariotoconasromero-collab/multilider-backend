@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Mail\CorreoMasivo;
 use App\Models\CampanaCorreo;
+use App\Services\MailAddresses;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -52,7 +53,7 @@ class EnviarCorreoMasivoJob implements ShouldQueue
             }
 
             try {
-                Mail::to($destinatario['correo'])
+                Mail::to(MailAddresses::resolve($destinatario['correo']))
                     ->send(new CorreoMasivo(
                         $destinatario['nombre'],
                         $campana->asunto,

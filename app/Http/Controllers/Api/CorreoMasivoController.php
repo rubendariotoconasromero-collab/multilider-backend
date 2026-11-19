@@ -9,6 +9,7 @@ use App\Models\CampanaCorreo;
 use App\Models\Ciudad;
 use App\Models\Cliente;
 use App\Services\MailCampaigns;
+use App\Services\MailAddresses;
 use App\Services\Remote\AggregateReader;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -188,7 +189,7 @@ class CorreoMasivoController extends Controller
         $rows = AggregateRoutes::enabled($request)
             ? $this->remoteAudience($request, $type) : $this->localAudience($request, $type);
         $rows = $rows->filter(fn ($row) => filter_var(trim($row['correo']), FILTER_VALIDATE_EMAIL))
-            ->map(fn ($row) => array_replace($row, ['correo' => strtolower(trim($row['correo']))]))->sortBy('id');
+            ->map(fn ($row) => array_replace($row, ['correo' => MailAddresses::resolve($row['correo'])]))->sortBy('id');
         if ($type === 'seleccionados') {
             abort_unless($rows->unique('id')->count() === count($request->input('cliente_ids')), 422,
                 'Uno de los clientes seleccionados ya no tiene un correo válido.');
