@@ -57,7 +57,7 @@ Route::prefix('public')->group(function () {
     Route::post('clientes/buscar', [PagoPublicoController::class, 'buscarCliente']);
     Route::post('pagos/procesar', [PagoPublicoController::class, 'procesarPago']);
     Route::get('pagos/verificar/{id}', [PagoPublicoController::class, 'verificarEstado']);
-    Route::post('pagos/callback', [PagoPublicoController::class, 'callbackLibelula']);
+    Route::match(['get', 'post'], 'pagos/callback', [PagoPublicoController::class, 'callbackLibelula']);
     Route::post('pagos/confirmar-retorno', [PagoPublicoController::class, 'confirmarRetorno']);
 });
 

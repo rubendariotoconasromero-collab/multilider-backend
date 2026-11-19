@@ -80,13 +80,23 @@ final class LocalPaymentTests
     public function callback(Request $request)
     {
         $this->local();
-        $reference = $request->query('identificador', $request->input('identificador'));
-        $provider = $request->input('transaction_id');
-        abort_if(strlen((string) $reference) > 255 || strlen((string) $provider) > 255, 422);
-        $id = hash('sha256', json_encode([$reference, $provider, (string) $request->input('error'), (string) $request->input('cancel_order')]));
+        abort_if($request->isMethod('HEAD'), 405, 'Usa GET o POST para la notificación.', ['Allow' => 'GET, POST']);
+        $notification = validator([
+            'identificador' => $request->query('identificador', $request->input('identificador')),
+            'transaction_id' => $request->input('transaction_id'),
+        ], [
+            'identificador' => 'nullable|required_without:transaction_id|string|max:255',
+            'transaction_id' => 'nullable|required_without:identificador|string|max:255',
+        ])->validate();
+        $reference = $notification['identificador'] ?? null;
+        $provider = $notification['transaction_id'] ?? null;
+        $error = $request->input('error');
+        $cancel = $request->input('cancel_order');
+        abort_if(($error !== null && !is_scalar($error)) || ($cancel !== null && !is_scalar($cancel)), 422);
+        $id = hash('sha256', json_encode([$reference, $provider, (string) $error, (string) $cancel]));
         DB::table('payment_test_inbox')->insertOrIgnore(['id' => $id, 'reference' => $reference, 'provider_id' => $provider, 'state' => 'Pendiente', 'created_at' => now(), 'updated_at' => now()]);
         if ($reference || $provider) { $this->reconcile($reference, $provider); }
-        return response()->json(['ok' => true, 'es_prueba' => true]);
+        return response()->json(['ok' => true, 'es_prueba' => true])->header('Cache-Control', 'private, no-store');
     }
     public function status(string $reference)
     {

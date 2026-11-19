@@ -51,9 +51,23 @@ final class PhaseFivePaymentTest extends TestCase
         $payload = ['identificador' => $reference, 'transaction_id' => 'forged', 'error' => '0'];
         $this->postJson('/api/public/pagos/callback', $payload)->assertOk();
         $this->postJson('/api/public/pagos/callback', $payload)->assertOk();
+        $this->getJson('/api/public/pagos/callback?'.http_build_query($payload))->assertOk();
         $this->assertDatabaseCount('payment_test_inbox', 1);
         $this->assertDatabaseHas('payment_test_orders', ['id' => $operation, 'state' => 'Registrada']);
         $this->assertDatabaseCount('ingresos', 0);
+    }
+
+    public function test_callback_requires_an_identifier_before_recording_notifications(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake();
+        $path = '/api/public/pagos/callback';
+        $this->getJson($path)->assertUnprocessable()->assertJsonValidationErrors('identificador');
+        $this->postJson($path, [])->assertUnprocessable()->assertJsonValidationErrors('transaction_id');
+        $this->getJson($path.'?identificador[]=malformed')->assertUnprocessable();
+        $this->call('HEAD', $path, ['transaction_id' => 'provider-fixture'])->assertStatus(405);
+        Http::assertNothingSent();
+        $this->assertDatabaseCount('payment_test_inbox', 0);
     }
 
     public function test_verified_reference_still_requires_exact_currency_and_amount(): void
