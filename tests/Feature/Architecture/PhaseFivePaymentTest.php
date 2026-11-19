@@ -3,6 +3,7 @@
 namespace Tests\Feature\Architecture;
 
 use App\Models\Pago;
+use App\Models\Cuota;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -15,28 +16,49 @@ final class PhaseFivePaymentTest extends TestCase
 {
     use BusinessFixtures, RefreshDatabase;
 
-    public function test_verified_twenty_cent_test_never_settles_real_debt(): void
+    public static function paymentCallbackMethods(): array
+    {
+        return [['GET'], ['POST']];
+    }
+
+    /** @dataProvider paymentCallbackMethods */
+    public function test_verified_twenty_cent_test_never_settles_real_debt(string $method): void
     {
         config(['services.libelula.api_key' => 'fixture-not-a-real-key', 'services.libelula.base_url' => 'https://payments.example.test']);
+        Http::preventStrayRequests();
         Sanctum::actingAs($this->user());
-        $sale = $this->salePayload($this->property());
+        $sale = array_replace($this->salePayload($this->property(), true), [
+            'monto_total' => 1000, 'monto_liquido' => 1000, 'cuota_inicial' => 100, 'saldo_credito' => 900,
+            'numero_cuotas' => 1, 'tasa_interes' => 12, 'descuento' => 0,
+        ]);
         $this->postJson('/api/ventas', $sale)->assertCreated();
         $payment = Pago::firstOrFail();
+        $quota = Cuota::firstOrFail();
+        $originalPayment = $payment->getAttributes();
+        $originalQuota = $quota->getAttributes();
         $operation = (string) Str::uuid(); $reference = 'TEMP-'.$operation;
         Http::fake([
             'payments.example.test/rest/deuda/registrar' => Http::response(['error' => 0, 'id_transaccion' => 'provider-fixture', 'url_pasarela_pagos' => 'https://payments.example.test/checkout']),
             'payments.example.test/rest/deuda/consultar_deudas/por_fechas' => Http::response(['error' => 0, 'datos' => [
-                ['identificador' => $reference, 'pagado' => true, 'valor_total' => 0.20, 'moneda' => 'BOB'],
+                ['identificador' => $reference, 'pagado' => true, 'valor_total' => '0.40', 'moneda' => 'BOB'],
             ]]),
         ]);
-        $payload = ['operacion_id' => $operation, 'cliente_id' => $sale['cliente_id'], 'pago_ids' => [$payment->id], 'cuota_ids' => [],
+        $payload = ['operacion_id' => $operation, 'cliente_id' => $sale['cliente_id'], 'pago_ids' => [$payment->id], 'cuota_ids' => [$quota->id],
             'ci_pagador' => 'TEST', 'telefono_pagador' => '123', 'nombres_pagador' => 'Nombre', 'apellidos_pagador' => 'Fixture', 'correo_pagador' => 'fixture@example.test'];
-        $this->postJson('/api/public/pagos/procesar', $payload)->assertOk()->assertJsonPath('es_prueba', true);
+        $this->postJson('/api/public/pagos/procesar', $payload)->assertOk()->assertJsonPath('es_prueba', true)->assertJsonPath('monto_prueba', '0.40');
         $this->postJson('/api/public/pagos/procesar', $payload)->assertOk();
         Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request['identificador'] === $reference && count($request['lineas_detalle_deuda']) === 2
+            && collect($request['lineas_detalle_deuda'])->every(fn ($line) => $line['costo_unitario'] === 0.20 && $line['cantidad'] === 1));
+        $callback = '/api/public/pagos/callback';
+        $notification = ['identificador' => $reference];
+        $response = $method === 'GET' ? $this->getJson($callback.'?'.http_build_query($notification)) : $this->postJson($callback, $notification);
+        $response->assertOk()->assertJsonPath('ok', true);
+        $this->assertDatabaseHas('payment_test_orders', ['reference' => $reference, 'state' => 'PagadaPrueba']);
         $this->postJson('/api/public/pagos/confirmar-retorno', ['id_transaccion' => $reference])
-            ->assertOk()->assertJsonPath('estado', 'PAGADO_PRUEBA')->assertJsonPath('deuda_real_liquidada', false);
-        $this->assertDatabaseHas('pagos', ['id' => $payment->id, 'estado' => 'PENDIENTE_PAGO', 'monto' => 9500]);
+            ->assertOk()->assertJsonPath('estado', 'PAGADO_PRUEBA')->assertJsonPath('deuda_real_liquidada', false)->assertJsonPath('monto_prueba', '0.40');
+        $this->assertSame($originalPayment, $payment->fresh()->getAttributes());
+        $this->assertSame($originalQuota, $quota->fresh()->getAttributes());
         $this->assertDatabaseCount('ingresos', 0);
         $this->assertDatabaseCount('payment_test_orders', 1);
     }
