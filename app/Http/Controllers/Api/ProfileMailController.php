@@ -67,7 +67,8 @@ class ProfileMailController extends Controller
             return response()->json(['message' => 'Se perdió la conexión al buzón. Vuelve a conectar con la contraseña del correo.'], 409);
         }
         try {
-            return response()->json($action($connection, $email, $password));
+            $result = $action($connection, $email, $password);
+            return $result instanceof \Symfony\Component\HttpFoundation\Response ? $result : response()->json($result);
         } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
             throw $e;
         } catch (\Throwable $e) {
@@ -88,6 +89,25 @@ class ProfileMailController extends Controller
         $data = $request->validate(['folder' => ['required', Rule::in(ProfileMailbox::FOLDERS)]]);
         abort_unless($uid > 0, 404);
         return $this->withMailbox($request, $mail, fn($connection) => $mail->read($connection, $data['folder'], $uid));
+    }
+
+    public function attachment(Request $request, ProfileMailbox $mail, int $uid, string $part)
+    {
+        $data = $request->validate(['folder' => ['required', Rule::in(ProfileMailbox::FOLDERS)], 'uidvalidity' => 'required|integer|min:1',
+            'inline' => 'sometimes|boolean', 'preview' => 'sometimes|boolean', 'page' => 'sometimes|integer|min:1|max:10000', 'sheet' => 'sometimes|integer|min:0|max:49']);
+        abort_unless($uid > 0 && preg_match('/^[1-9][0-9]*(?:\.[1-9][0-9]*){0,15}$/D', $part), 404);
+        return $this->withMailbox($request, $mail, function ($connection) use ($mail, $uid, $part, $data, $request) {
+            $file = $mail->attachment($connection, $data['folder'], $uid, (int)$data['uidvalidity'], $part);
+            $streaming = false;
+            try {
+                $service = app(\App\Services\MailDocumentContent::class);
+                if ($request->boolean('preview')) return response()->json($service->preview($file['path'], $file['nombre'], (int)($data['page'] ?? 1), (int)($data['sheet'] ?? 0)))
+                    ->header('Cache-Control', 'private, no-store');
+                $response = $service->response($file['path'], $file['nombre'], $request->boolean('inline'), true);
+                $streaming = true;
+                return $response;
+            } finally { if (!$streaming) @unlink($file['path']); }
+        });
     }
 
     public function move(Request $request, ProfileMailbox $mail, int $uid)

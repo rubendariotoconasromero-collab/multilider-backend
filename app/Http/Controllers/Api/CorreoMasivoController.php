@@ -117,6 +117,7 @@ class CorreoMasivoController extends Controller
                     'tipo_destinatario' => $data['tipo'], 'filtros' => $filtros, 'total_destinatarios' => $destinatarios->count(),
                 ]);
                 if ($campaign->wasRecentlyCreated) {
+                    app(\App\Services\MailArchive::class)->campaign($campaign);
                     foreach ($destinatarios->chunk(100) as $chunk) {
                         DB::table('campana_destinatarios')->insert($chunk->map(fn ($row) => [
                             'campana_id' => $campaign->id, 'nombre' => $row['nombre'], 'correo' => $row['correo'],
@@ -136,6 +137,7 @@ class CorreoMasivoController extends Controller
         return response()->json([
             'message'   => 'Campaña creada. Los correos se están enviando en segundo plano.',
             'campana_id'=> $campana->id,
+            'envio_id' => app(\App\Services\MailArchive::class)->visible($request)->where('campana_id', $campana->id)->value('id'),
             'total'     => $campana->total_destinatarios,
         ], $campana->wasRecentlyCreated ? 201 : 200);
     }
@@ -143,7 +145,8 @@ class CorreoMasivoController extends Controller
     // GET /api/correo-masivo/historial
     public function historial(Request $request)
     {
-        $campanas = CampanaCorreo::where($this->campaigns->scope())->with('usuario:id,nombre')
+        $owner = app(\App\Services\MailArchive::class)->owner($request);
+        $campanas = CampanaCorreo::where($this->campaigns->scope())->with(['usuario:id,nombre', 'envioDocumental' => fn ($q) => $q->where($owner)->select('id', 'campana_id')])
             ->orderBy('created_at', 'desc')
             ->paginate($request->input('per_page', 10));
 

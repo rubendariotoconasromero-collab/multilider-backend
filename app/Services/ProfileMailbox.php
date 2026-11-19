@@ -75,23 +75,28 @@ class ProfileMailbox
         $selected = array_slice($uids, ($page - 1) * 20, 20);
         $rows = $selected ? (imap_fetch_overview($connection, implode(',', $selected), FT_UID) ?: []) : [];
         usort($rows, fn($a, $b) => $b->uid <=> $a->uid);
-        return ['data' => array_map(fn($row) => $this->summary($row), $rows),
+        return ['data' => array_map(function ($row) use ($connection) {
+            $structure = @imap_fetchstructure($connection, (int)$row->uid, FT_UID);
+            return $this->summary($row) + ['attachment_count' => $structure ? count(MailMime::attachments($structure)) : 0];
+        }, $rows),
             'total' => $total, 'page' => $page, 'last_page' => $last];
     }
 
-    private function bodyParts($connection, int $uid, object $part, string $section = ''): array
+    private function bodyParts($connection, int $uid, object $part, string $section = '', int &$budget = 1048576): array
     {
         $result = ['plain' => '', 'html' => ''];
+        if (MailMime::isAttachment($part)) return $result;
         if (isset($part->parts)) {
             foreach ($part->parts as $index => $child) {
                 $childSection = $section === '' ? (string)($index + 1) : $section.'.'.($index + 1);
-                $body = $this->bodyParts($connection, $uid, $child, $childSection);
+                $body = $this->bodyParts($connection, $uid, $child, $childSection, $budget);
                 foreach (['plain', 'html'] as $kind) $result[$kind] .= $body[$kind];
             }
             return $result;
         }
         if (($part->type ?? -1) !== 0 || strtoupper($part->disposition ?? '') === 'ATTACHMENT') return $result;
-        if (($part->bytes ?? 0) > 1024 * 1024) return $result;
+        if (($part->bytes ?? 0) > $budget || $budget <= 0) return $result;
+        $budget -= max(0, (int)($part->bytes ?? 0));
         $raw = $section === '' ? imap_body($connection, $uid, FT_UID | FT_PEEK)
             : imap_fetchbody($connection, $uid, $section, FT_UID | FT_PEEK);
         $raw = match ($part->encoding ?? 0) { 3 => base64_decode($raw ?: '', true) ?: '', 4 => quoted_printable_decode($raw ?: ''), default => $raw ?: '' };
@@ -111,6 +116,7 @@ class ProfileMailbox
         $overview = imap_fetch_overview($connection, (string)$uid, FT_UID)[0] ?? null;
         $structure = imap_fetchstructure($connection, $uid, FT_UID);
         if (!$overview || !$structure) throw new \RuntimeException('No se pudo leer el mensaje.');
+        $attachments = MailMime::attachments($structure);
         $parts = $this->bodyParts($connection, $uid, $structure);
         $html = preg_replace('~<(script|style)\b[^>]*>.*?</\1>~is', '', $parts['html']);
         $html = preg_replace('~<br\s*/?>|</(?:p|div|tr)>~i', "\n", $html);
@@ -119,8 +125,33 @@ class ProfileMailbox
         $from = $header->reply_to[0] ?? $header->from[0] ?? null;
         $reply = $from ? ($from->mailbox ?? '').'@'.($from->host ?? '') : '';
         imap_setflag_full($connection, (string)$uid, '\\Seen', ST_UID);
+        $status = @imap_status($connection, self::SERVER.$folder, SA_UIDVALIDITY);
         return $this->summary($overview) + ['body' => mb_substr(trim($text), 0, 100000),
-            'reply_to' => filter_var($reply, FILTER_VALIDATE_EMAIL) ? $reply : ''];
+            'reply_to' => filter_var($reply, FILTER_VALIDATE_EMAIL) ? $reply : '', 'uidvalidity' => (int)($status->uidvalidity ?? 0),
+            'adjuntos' => array_map(fn ($file) => array_diff_key($file, ['encoding' => true, 'encoded_bytes' => true]), $attachments)];
+    }
+
+    public function attachment($connection, string $folder, int $uid, int $uidvalidity, string $part): array
+    {
+        abort_unless($this->folder($connection, $folder), 404, 'El mensaje ya no está en esta carpeta.');
+        $status = @imap_status($connection, self::SERVER.$folder, SA_UIDVALIDITY);
+        abort_unless($status && (int)$status->uidvalidity === $uidvalidity, 409, 'La carpeta cambió. Actualiza el mensaje antes de abrir el adjunto.');
+        abort_unless(imap_msgno($connection, $uid), 404, 'El mensaje ya no está disponible.');
+        $structure = @imap_fetchstructure($connection, $uid, FT_UID);
+        abort_unless($structure, 404);
+        $file = collect(MailMime::attachments($structure))->firstWhere('id', $part);
+        abort_unless($file, 404, 'Adjunto no encontrado.');
+        abort_if($file['encoded_bytes'] > config('mail_documents.download_bytes') * 1.4, 413, 'El adjunto supera el límite de descarga.');
+        $directory = storage_path('framework/cache/mail-attachments');
+        if (!is_dir($directory)) mkdir($directory, 0700, true);
+        $encoded = tempnam($directory, 'mime-'); $decoded = tempnam($directory, 'file-');
+        try {
+            abort_unless(@imap_savebody($connection, $encoded, $uid, $part, FT_UID | FT_PEEK), 502, 'No se pudo obtener el adjunto.');
+            abort_if(filesize($encoded) > config('mail_documents.download_bytes') * 1.4, 413, 'El adjunto supera el límite de descarga.');
+            MailMime::decodeFile($encoded, $file['encoding'], $decoded);
+            return ['path' => $decoded, 'nombre' => $file['nombre']];
+        } catch (\Throwable $error) { @unlink($decoded); throw $error; }
+        finally { @unlink($encoded); }
     }
 
     public function move($connection, string $folder, int $uid): void

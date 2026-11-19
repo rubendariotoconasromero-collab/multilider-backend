@@ -29,6 +29,7 @@ final class EnsureArchitectureReady
                 'GET api/empresa/datos', 'POST api/empresa',
             ], true)
             && ! $request->is('api/perfil/correo/*')
+            && ! $request->is('api/correo/envios', 'api/correo/envios/*')
             && ! preg_match('~^api/(usuarios|roles|permisos|asignar-permisos)(/|$)~', $request->path())) {
             // Laravel continues to own dashboard/reports/company/mail/portal.
             // Business adapters still pending in F4-F8 must not silently read local data.

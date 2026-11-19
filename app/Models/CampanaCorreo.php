@@ -31,4 +31,9 @@ class CampanaCorreo extends Model
     {
         return $this->belongsTo(User::class, 'user_id');
     }
+
+    public function envioDocumental()
+    {
+        return $this->hasOne(MailDispatch::class, 'campana_id');
+    }
 }

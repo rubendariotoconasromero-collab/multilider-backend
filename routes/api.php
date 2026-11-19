@@ -133,8 +133,15 @@ Route::middleware(['auth:architecture', \App\Http\Middleware\BusinessDispatch::c
         Route::post('desconectar', [ProfileMailController::class, 'disconnect']);
         Route::get('mensajes', [ProfileMailController::class, 'messages']);
         Route::get('mensajes/{uid}', [ProfileMailController::class, 'read'])->whereNumber('uid');
+        Route::get('mensajes/{uid}/adjuntos/{part}', [ProfileMailController::class, 'attachment'])->whereNumber('uid')->where('part', '[1-9][0-9]*(?:\.[1-9][0-9]*){0,15}');
         Route::post('mensajes/{uid}/mover', [ProfileMailController::class, 'move'])->whereNumber('uid');
         Route::post('enviar', [ProfileMailController::class, 'send'])->middleware('throttle:10,1,profile-mail-send:');
+    });
+
+    Route::prefix('correo/envios')->middleware('throttle:60,1,mail-archive:')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\MailArchiveController::class, 'index']);
+        Route::get('{id}', [\App\Http\Controllers\Api\MailArchiveController::class, 'show'])->whereUuid('id');
+        Route::get('{id}/archivos/{file}', [\App\Http\Controllers\Api\MailArchiveController::class, 'content'])->whereUuid('id')->whereUuid('file');
     });
 
     Route::middleware(IdentityAdministration::class)->group(function () {

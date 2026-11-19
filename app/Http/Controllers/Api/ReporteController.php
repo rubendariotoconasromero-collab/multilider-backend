@@ -1590,6 +1590,7 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
             'asesor_ids' => 'required_without:usuario_ids|prohibits:usuario_ids|array|min:1|max:100',
             'asesor_ids.*' => 'integer|min:1|distinct'.($remote ? '' : '|exists:asesores,id'),
             'params' => 'nullable|array',
+            'request_key' => 'nullable|uuid',
         ]);
         abort_unless(AggregateRoutes::canReport($request, $request->reporte), 403);
 
@@ -1629,36 +1630,33 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
 
         $filtros->setUserResolver($request->getUserResolver());
         $currencyReport = in_array($request->reporte, ['ventas-cobros', 'cartera-mora', 'desempeno-asesores'], true);
-        if ($remote || ($currencyReport && $filtros->filled('moneda'))) {
-            [$pdfBinario, $nombreArchivo] = $this->remotePdf(app(AggregateReports::class)->data($filtros, $request->reporte), $request->reporte);
-        } else {
-            try {
-                [$pdfBinario, $nombreArchivo] = $this->generarPdfBinario($request->reporte, $filtros);
-            } catch (\Throwable $e) {
-                Log::error('Error generando PDF para informe.', ['error' => $e::class]);
-
-                return response()->json(['message' => 'No se pudo generar el PDF del informe.'], 500);
+        $archive = app(\App\Services\MailArchive::class);
+        $dispatch = $archive->report($request, $request->reporte, $usuarios->all(), function () use ($remote, $currencyReport, $filtros, $request) {
+            if ($remote || ($currencyReport && $filtros->filled('moneda'))) {
+                return $this->remotePdf(app(AggregateReports::class)->data($filtros, $request->reporte), $request->reporte);
             }
-        }
-
-        $enviados = 0;
-        $fallidos = 0;
-
-        foreach ($usuarios->unique(fn($usuario) => MailAddresses::resolve($usuario->correo)) as $usuario) {
+            return $this->generarPdfBinario($request->reporte, $filtros);
+        }, $nombreReporte);
+        $document = $dispatch->documents()->firstOrFail();
+        if ($dispatch->wasRecentlyCreated) foreach ($dispatch->destinatarios as $recipient) {
+            if (!$archive->transition($dispatch->id, $recipient['correo'], 'pendiente', 'enviando')) continue;
             try {
-                Mail::to(MailAddresses::resolve($usuario->correo))
+                $sent = Mail::to($recipient['correo'])
                     ->send(new InformeReporte(
-                        $usuario->nombre,
+                        $recipient['nombre'],
                         $nombreReporte,
-                        $pdfBinario,
-                        $nombreArchivo,
+                        file_get_contents($archive->file($document)),
+                        $document->nombre,
                     ));
-                $enviados++;
+                $archive->transition($dispatch->id, $recipient['correo'], 'enviando', 'aceptado_smtp', $sent?->getMessageId());
             } catch (\Throwable $e) {
-                $fallidos++;
+                $archive->transition($dispatch->id, $recipient['correo'], 'enviando', 'incierto');
                 Log::error('Error enviando informe.', ['error' => $e::class]);
             }
         }
+        $details = $archive->describe($dispatch->fresh(), true);
+        $enviados = $details['aceptados'];
+        $fallidos = $details['total'] - $enviados;
 
         $msg = "Informe enviado: {$enviados} correo(s) exitoso(s)";
         if ($fallidos > 0) $msg .= ", {$fallidos} fallido(s).";
@@ -1667,6 +1665,8 @@ table.main td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}
             'message'  => $msg,
             'enviados' => $enviados,
             'fallidos' => $fallidos,
+            'envio_id' => $dispatch->id,
+            'inciertos' => $details['inciertos'],
         ]);
     }
 
